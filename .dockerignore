@@ -1,0 +1,9 @@
+node_modules
+/lib
+browser/resources
+example-local
+.github
+docker-compose.yaml
+attestor.dockerfile
+# Upstream test env files enable test-only knobs when NODE_ENV names them.
+.env*

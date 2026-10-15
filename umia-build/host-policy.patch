@@ -1,0 +1,1759 @@
+diff --git a/src/server/handlers/claimTeeBundle.ts b/src/server/handlers/claimTeeBundle.ts
+index 89e1e8b..4d2b684 100644
+--- a/src/server/handlers/claimTeeBundle.ts
++++ b/src/server/handlers/claimTeeBundle.ts
+@@ -1,378 +1,7 @@
+-/**
+- * TEE Bundle Claim Handler
+- * Handles ClaimTeeBundleRequest by verifying TEE attestations and reconstructing TLS transcript
+- */
+-
+-import { CLAIM_EPOCH } from '#src/config/claim-epoch.ts'
+-import type { InitRequest, ProviderClaimInfo } from '#src/proto/api.ts'
+-import { ClaimTeeBundleResponse } from '#src/proto/api.ts'
+-import type { CertificateInfo } from '#src/proto/tee-bundle.ts'
+-import { VerificationBundle } from '#src/proto/tee-bundle.ts'
+-import { substituteParamValues } from '#src/providers/http/index.ts'
+-import { assertValidProviderTranscript } from '#src/server/utils/assert-valid-claim-request.ts'
+-import { niceParseJsonObject } from '#src/server/utils/generics.ts'
+-import { signClaimResponse } from '#src/server/utils/sign-claim-response.ts'
+-import { verifyOprfMpcOutputs } from '#src/server/utils/tee-oprf-mpc-verification.ts'
+-import type { OprfVerificationResult } from '#src/server/utils/tee-oprf-verification.ts'
+-import { verifyOprfProofs } from '#src/server/utils/tee-oprf-verification.ts'
+-import type { TeeTranscriptData } from '#src/server/utils/tee-transcript-reconstruction.ts'
+-import { reconstructTlsTranscript } from '#src/server/utils/tee-transcript-reconstruction.ts'
+-import { verifyTeeBundle } from '#src/server/utils/tee-verification.ts'
+-import type { Logger } from '#src/types/general.ts'
+-import type { ProviderCtx, RPCHandler, Transcript } from '#src/types/index.ts'
++import type { RPCHandler } from '#src/types/index.ts'
+ import { AttestorError } from '#src/utils/error.ts'
+-import { getIdentifierFromClaimInfo } from '#src/utils/index.ts'
+-
+-export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async(request, ctx) => {
+-	try {
+-		return await processClaimTeeBundle(request, ctx)
+-	} catch(err) {
+-		ctx.logger.error({ err }, 'claim handler failed')
+-		throw err
+-	}
+-}
+-
+-const processClaimTeeBundle: RPCHandler<'claimTeeBundle'> = async(
+-	teeBundleRequest,
+-	{ logger, client }
+-) => {
+-	const {
+-		verificationBundle,
+-		data
+-	} = teeBundleRequest
+-
+-
+-	// Initialize response
+-	const res = ClaimTeeBundleResponse.create({})
+-
+-	// 1. Verify TEE bundle (attestations + signatures) - this includes timestamp validation
+-	logger.info('Starting TEE bundle verification')
+-	const teeData = await verifyTeeBundle(verificationBundle, logger)
+-
+-	// 2. Extract timestampS from TEE_K bundle for claim signing
+-	const timestampS = Math.floor(teeData.kOutputPayload.timestampMs / 1000)
+-
+-	// 3. Verify OPRF proofs first (before transcript reconstruction)
+-	logger.info('Verifying OPRF proofs')
+-	// Parse the verification bundle to get OPRF verifications
+-	const bundle = VerificationBundle.decode(verificationBundle)
+-	const zkOprfResults = await verifyOprfProofs(
+-		{ ...teeData, oprfVerifications: bundle.oprfVerifications },
+-		logger
+-	)
+-
+-	// 4. Verify OPRF MPC outputs (TEE-to-TEE computed OPRF)
+-	logger.info('Verifying OPRF MPC outputs')
+-	const oprfMpcResults = verifyOprfMpcOutputs(
+-		teeData.kOutputPayload,
+-		teeData.tOutputPayload,
+-		logger
+-	)
+-
+-	// 5. Combine ZK and OPRF MPC results for transcript reconstruction
+-	const allOprfResults = validateAndCombineOprfResults(zkOprfResults, oprfMpcResults, logger)
+-
+-	// 6. Reconstruct TLS transcript with all OPRF replacements applied
+-	logger.info('Starting TLS transcript reconstruction with OPRF replacements')
+-	const transcriptData = await reconstructTlsTranscript(teeData, logger, allOprfResults)
+-
+-	// 7. Create plaintext transcript for provider validation (OPRF already applied)
+-	logger.info('Creating plaintext transcript from TEE data')
+-	const plaintextTranscript = createPlaintextTranscriptFromTeeData(transcriptData, logger)
+-
+-
+-	// 8. Direct provider validation
+-	logger.info('Running direct provider validation on TEE reconstructed data')
+-
+-
+-	if(!data) {
+-		throw new AttestorError('ERROR_INVALID_CLAIM', 'No claim data provided in TEE bundle request')
+-	}
+-
+-	const validatedClaim = await validateTeeProviderReceipt(
+-		plaintextTranscript,
+-		client.metadata,
+-		data,
+-		logger,
+-		{ version: client.metadata.clientVersion, authenticatedResponseCharset: transcriptData.authenticatedResponseCharset },
+-		transcriptData.certificateInfo
+-	)
+-
+-	const ctx = niceParseJsonObject(validatedClaim.context, 'context')
+-	// eslint-disable-next-line camelcase
+-	ctx.pcr0_k = teeData.teekPcr0
+-	// eslint-disable-next-line camelcase
+-	ctx.pcr0_t = teeData.teetPcr0
+-	// eslint-disable-next-line camelcase
+-	ctx.tee_session_id = teeData.teeSessionId
+-	validatedClaim.context = JSON.stringify(ctx)
+-
+-	res.claim = {
+-		...validatedClaim,
+-		identifier: getIdentifierFromClaimInfo(validatedClaim),
+-		// Use timestampS from TEE_K bundle for claim signing
+-		timestampS,
+-		epoch: CLAIM_EPOCH
+-	}
+-
+-	logger.info({ claim: res.claim }, 'TEE bundle claim validation successful')
+-
+-
+-	// 9. Sign the response
+-	await signClaimResponse(res, ClaimTeeBundleResponse, client)
+-
+-	logger.info('TEE bundle claim processing completed')
+-	return res
+-}
+-
+-/**
+- * Creates a plaintext transcript from TEE reconstructed data
+- * This converts the TEE transcript data into the format expected by provider validation
+- * NEW: Uses consolidated response instead of individual packets for simplicity
+- */
+-function createPlaintextTranscriptFromTeeData(
+-	transcriptData: TeeTranscriptData,
+-	logger: Logger
+-): Transcript<Uint8Array> {
+-	const transcript: Array<{ sender: 'client' | 'server', message: Uint8Array }> = []
+-
+-	// Add reconstructed request (client -> server)
+-	if(transcriptData.revealedRequest && transcriptData.revealedRequest.length > 0) {
+-		transcript.push({
+-			sender: 'client',
+-			message: transcriptData.revealedRequest
+-		})
+-		logger.debug('Added TEE revealed request to plaintext transcript', {
+-			length: transcriptData.revealedRequest.length
+-		})
+-	}
+-
+-	// Add consolidated reconstructed response (server -> client)
+-	if(transcriptData.reconstructedResponse && transcriptData.reconstructedResponse.length > 0) {
+-		transcript.push({
+-			sender: 'server',
+-			message: transcriptData.reconstructedResponse
+-		})
+-		logger.debug('Added TEE consolidated response to plaintext transcript', {
+-			length: transcriptData.reconstructedResponse.length
+-		})
+-	}
+-
+-	// Log certificate validation info if available
+-	if(transcriptData.certificateInfo) {
+-		logger.info('Certificate information available for validation', {
+-			commonName: transcriptData.certificateInfo.commonName,
+-			issuerCommonName: transcriptData.certificateInfo.issuerCommonName,
+-			dnsNames: transcriptData.certificateInfo.dnsNames,
+-			notBefore: new Date(transcriptData.certificateInfo.notBeforeUnix * 1000).toISOString(),
+-			notAfter: new Date(transcriptData.certificateInfo.notAfterUnix * 1000).toISOString()
+-		})
+-	}
+-
+-	logger.info('Created plaintext transcript from TEE data', {
+-		totalMessages: transcript.length,
+-		hasRequest: !!transcriptData.revealedRequest?.length,
+-		hasResponse: !!transcriptData.reconstructedResponse?.length,
+-		hasCertificateInfo: !!transcriptData.certificateInfo
+-	})
+-
+-	return transcript
+-}
+-
+-/**
+- * Validates TEE provider receipt directly without signature validation
+- * This is essentially assertValidProviderTranscript but for TEE data
+- * NEW: Includes certificate validation for domain authentication
+- */
+-async function validateTeeProviderReceipt<T extends ProviderClaimInfo>(
+-	plaintextTranscript: Transcript<Uint8Array>,
+-	metadata: InitRequest,
+-	claimInfo: T,
+-	logger: Logger,
+-	providerCtx: ProviderCtx,
+-	certificateInfo?: CertificateInfo
+-): Promise<T> {
+-	logger.info('Starting direct TEE provider validation', {
+-		provider: claimInfo.provider,
+-		transcriptMessages: plaintextTranscript.length,
+-		hasCertificateInfo: !!certificateInfo
+-	})
+-
+-	// Validate certificate if available
+-	if(certificateInfo) {
+-		validateTlsCertificate(claimInfo, certificateInfo, logger)
+-	}
+-
+-	// Use the existing provider validation logic directly
+-	const validatedClaim = await assertValidProviderTranscript(
+-		plaintextTranscript,
+-		metadata,
+-		claimInfo,
+-		logger,
+-		providerCtx
+-	)
+-
+-	logger.info('TEE provider validation completed successfully', {
+-		provider: validatedClaim.provider,
+-		owner: (validatedClaim as any).owner || 'unknown'
+-	})
+-
+-	return validatedClaim
+-}
+-
+-/**
+- * Checks if a hostname matches a certificate name (with wildcard support)
+- * @param hostname - The hostname to check
+- * @param certName - The certificate name
+- * @returns true if the hostname is valid for this certificate name
+- */
+-function isHostnameValidForCertificate(hostname: string, certName: string): boolean {
+-	// Exact match
+-	if(hostname === certName) {
+-		return true
+-	}
+-
+-	// Wildcard match
+-	if(certName.startsWith('*.')) {
+-		// Extract the domain from wildcard
+-		const wildcardDomain = certName.slice(2)
+-
+-		// Check if hostname ends with the wildcard domain
+-		if(hostname.endsWith(wildcardDomain)) {
+-			// Ensure we're matching a subdomain, not partial domain
+-			const subdomainPart = hostname.slice(0, -(wildcardDomain.length))
+-
+-			// Valid if:
+-			// 1. The subdomain part ends with a dot (proper subdomain boundary)
+-			// 2. The subdomain part doesn't contain additional dots (single-level wildcard)
+-			if(subdomainPart.endsWith('.')) {
+-				const subdomain = subdomainPart.slice(0, -1)
+-				// Wildcard only matches single level, not multiple subdomains
+-				return !subdomain.includes('.')
+-			}
+-		}
+-	}
+-
+-	return false
+-}
+-
+-/**
+- * Validates that the TLS certificate is valid for the domain being claimed
+- */
+-function validateTlsCertificate(
+-	claimInfo: ProviderClaimInfo,
+-	certificateInfo: CertificateInfo,
+-	logger: Logger
+-): void {
+-	// Extract hostname from the claim (this varies by provider)
+-	let claimedHostname: string | undefined
+-
+-	const paramsWithTemplates = niceParseJsonObject(claimInfo.parameters, 'params')
+-	const params = substituteParamValues(paramsWithTemplates, undefined, true).newParams
+-
+-	// Different providers store hostname in different places
+-	if('url' in params && typeof params.url === 'string') {
+-		claimedHostname = new URL(params.url).hostname
+-	}
+-
+-	if(!claimedHostname) {
+-		logger.warn('Could not extract hostname from claim for certificate validation', {
+-			provider: claimInfo.provider
+-		})
+-		throw new AttestorError(
+-			'ERROR_INVALID_CLAIM',
+-			'Certificate validation failed: hostname not found'
+-		)
+-	}
+-
+-	logger.info('Validating TLS certificate for claimed hostname', {
+-		claimedHostname,
+-		certificateCommonName: certificateInfo.commonName,
+-		certificateDnsNames: certificateInfo.dnsNames
+-	})
+-
+-	// Check if claimed hostname matches certificate (including wildcard support)
+-	const isValidForHostname =
+-		isHostnameValidForCertificate(claimedHostname, certificateInfo.commonName) ||
+-		certificateInfo.dnsNames.some(name => isHostnameValidForCertificate(claimedHostname, name))
+-
+-	if(!isValidForHostname) {
+-		throw new AttestorError(
+-			'ERROR_INVALID_CLAIM',
+-			`Certificate validation failed: hostname '${claimedHostname}' not valid for certificate (CN: ${certificateInfo.commonName}, SANs: ${certificateInfo.dnsNames.join(', ')})`
+-		)
+-	}
+-
+-	// Check certificate validity period
+-	const now = Date.now() / 1000 // Current time in Unix seconds
+-	if(now < certificateInfo.notBeforeUnix || now > certificateInfo.notAfterUnix) {
+-		throw new AttestorError(
+-			'ERROR_INVALID_CLAIM',
+-			`Certificate validation failed: certificate not valid at current time (valid from ${new Date(certificateInfo.notBeforeUnix * 1000).toISOString()} to ${new Date(certificateInfo.notAfterUnix * 1000).toISOString()})`
+-		)
+-	}
+-
+-	logger.info('TLS certificate validation passed', {
+-		claimedHostname,
+-		validatedAgainst: isHostnameValidForCertificate(claimedHostname, certificateInfo.commonName) ?
+-			`CommonName: ${certificateInfo.commonName}` :
+-			`SAN: ${certificateInfo.dnsNames.find(name => isHostnameValidForCertificate(claimedHostname, name))}`
+-	})
+-}
+-
+-/**
+- * Validates OPRF results have no overlapping ranges and combines them
+- * SECURITY: Prevents position collisions between ZK and OPRF MPC results
+- */
+-function validateAndCombineOprfResults(
+-	zkOprfResults: OprfVerificationResult[],
+-	oprfMpcResults: OprfVerificationResult[],
+-	logger: Logger
+-): OprfVerificationResult[] {
+-	const allOprfResults = [...zkOprfResults, ...oprfMpcResults]
+-
+-	if(allOprfResults.length === 0) {
+-		return allOprfResults
+-	}
+-
+-	logger.info(`Combined ${zkOprfResults.length} ZK OPRF + ${oprfMpcResults.length} OPRF MPC results`)
+-
+-	// Preserve the split-AEAD behavior: exact ZK/MPC duplicates are accepted,
+-	// while partial overlaps are rejected. CBC forbids ZK OPRF data and checks
+-	// overlap among its MPC ranges before this function is called.
+-	const seen: Record<number, { length: number, source: string }> = {}
+-	for(const result of zkOprfResults) {
+-		seen[result.position] = { length: result.length, source: 'zk' }
+-	}
+-
+-	for(const result of oprfMpcResults) {
+-		const existing = seen[result.position]
+-		if(existing) {
+-			if(existing.length !== result.length) {
+-				throw new AttestorError(
+-					'ERROR_INVALID_CLAIM',
+-					`OPRF range conflict at position ${result.position}: ZK length ${existing.length} vs MPC length ${result.length}`
+-				)
+-			}
+-
+-			logger.warn(`Duplicate OPRF range at position ${result.position} from both ZK and MPC - using MPC result`)
+-		}
+-
+-		for(const [pos, data] of Object.entries(seen)) {
+-			const position = Number(pos)
+-			const existingEnd = position + data.length
+-			const newEnd = result.position + result.length
+-			const overlaps = (result.position < existingEnd && newEnd > position) && result.position !== position
+-			if(overlaps) {
+-				throw new AttestorError(
+-					'ERROR_INVALID_CLAIM',
+-					`Overlapping OPRF ranges: [${position}:${existingEnd}] (${data.source}) and [${result.position}:${newEnd}] (mpc)`
+-				)
+-			}
+-		}
+-
+-		seen[result.position] = { length: result.length, source: 'mpc' }
+-	}
+ 
+-	return allOprfResults
++// Signed TEE outputs do not bind the raw destination host, port, or SNI.
++export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async() => {
++	throw AttestorError.badRequest('TEE claims require verified endpoint binding')
+ }
+diff --git a/src/server/handlers/claimTunnel.ts b/src/server/handlers/claimTunnel.ts
+index 8c10aff..f8d613b 100644
+--- a/src/server/handlers/claimTunnel.ts
++++ b/src/server/handlers/claimTunnel.ts
+@@ -4,6 +4,8 @@ import { ClaimTunnelResponse } from '#src/proto/api.ts'
+ import { getApm } from '#src/server/utils/apm.ts'
+ import { assertTranscriptsMatch, assertValidClaimRequest } from '#src/server/utils/assert-valid-claim-request.ts'
+ import { signClaimResponse } from '#src/server/utils/sign-claim-response.ts'
++import { assertAuthenticatedClaimAuthority } from '#src/server/utils/host-policy.ts'
++import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+ import type { RPCHandler } from '#src/types/index.ts'
+ import {
+ 	AttestorError,
+@@ -50,6 +52,13 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 	}
+ 
+ 	assertTranscriptsMatch(claimRequest.transcript, tunnel.transcript)
++	let inputContext: ReturnType<typeof assertSupportedInputContext>
++	try {
++		inputContext = assertSupportedInputContext(claimRequest.data?.context, client.authIdentity)
++	} catch(err) {
++		client.removeTunnel(request.id)
++		throw err
++	}
+ 
+ 	const res = ClaimTunnelResponse.create({ request: claimRequest })
+ 	try {
+@@ -92,6 +101,20 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 	if(res.request) {
+ 		res.request.transcript = []
+ 	}
++	if(res.claim) {
++		try {
++			assertSupportedSignedContext(res.claim.context, inputContext)
++			assertAuthenticatedClaimAuthority(
++				res.claim,
++				client.authHostWhitelist ?? [],
++				tunnel.createRequest?.host,
++				tunnel.createRequest?.port
++			)
++		} catch(err) {
++			client.removeTunnel(request.id)
++			throw err
++		}
++	}
+ 
+ 	await signClaimResponse(res, ClaimTunnelResponse, client)
+ 
+diff --git a/src/server/handlers/createTunnel.ts b/src/server/handlers/createTunnel.ts
+index 85a6e70..b1925f5 100644
+--- a/src/server/handlers/createTunnel.ts
++++ b/src/server/handlers/createTunnel.ts
+@@ -1,7 +1,7 @@
+ import { makeTcpTunnel } from '#src/server/tunnels/make-tcp-tunnel.ts'
+ import { getApm } from '#src/server/utils/apm.ts'
+ import { resolveHostnames } from '#src/server/utils/dns.ts'
+-import { matchesHostPattern } from '#src/server/utils/generics.ts'
++import { assertAuthenticatedTunnelHost } from '#src/server/utils/host-policy.ts'
+ import type { RPCHandler, Tunnel } from '#src/types/index.ts'
+ import { AttestorError } from '#src/utils/index.ts'
+ import { safeErrorCode } from '#src/utils/logger.ts'
+@@ -15,11 +15,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 	}
+ 
+ 	const allowedHosts = client.authHostWhitelist
+-	if(allowedHosts?.length && !allowedHosts.some(p => matchesHostPattern(p, opts.host))) {
+-		throw AttestorError.badRequest(
+-			`Host "${opts.host}" not allowed by auth request`
+-		)
+-	}
++	if(allowedHosts !== undefined) assertAuthenticatedTunnelHost(allowedHosts, opts.host, opts.port)
+ 
+ 	let cancelBgp: (() => void) | undefined
+ 
+diff --git a/src/server/socket.ts b/src/server/socket.ts
+index 8c2ff4a..ecd2f2d 100644
+--- a/src/server/socket.ts
++++ b/src/server/socket.ts
+@@ -8,6 +8,7 @@ import type { AuthenticatedUserData, RPCMessage, TunnelMessage } from '#src/prot
+ import { HANDLERS } from '#src/server/handlers/index.ts'
+ import { AuthSession, authExpiredError } from '#src/server/utils/auth-session.ts'
+ import { getApm } from '#src/server/utils/apm.ts'
++import { assertCanonicalHostWhitelist } from '#src/server/utils/host-policy.ts'
+ import { getInitialMessagesFromQuery } from '#src/server/utils/generics.ts'
+ import type { AcceptNewConnectionOpts, BGPListener, IAttestorServerSocket, Logger, RPCEvent, RPCHandler } from '#src/types/index.ts'
+ import { AttestorError, generateSessionId } from '#src/utils/index.ts'
+@@ -83,6 +84,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 
+ 	setAuthSession(data: AuthenticatedUserData) {
+ 		if(this.authSession) throw AttestorError.badRequest('Auth session already set')
++		assertCanonicalHostWhitelist(data.hostWhitelist)
+ 		this.authSession = new AuthSession(
+ 			data,
+ 			() => {
+diff --git a/src/server/tunnels/make-tcp-tunnel.ts b/src/server/tunnels/make-tcp-tunnel.ts
+index 6a8f07d..873094f 100644
+--- a/src/server/tunnels/make-tcp-tunnel.ts
++++ b/src/server/tunnels/make-tcp-tunnel.ts
+@@ -157,6 +157,9 @@ async function connectTcp({ host, port, geoLocation, proxySessionId, logger }: E
+ 
+ async function getSocket(opts: ExtraOpts) {
+ 	const { logger, geoLocation } = opts
++	if((geoLocation || opts.proxySessionId) && !HTTPS_PROXY_URL) {
++		throw AttestorError.badRequest('Geolocation or proxy session requires HTTPS_PROXY_URL')
++	}
+ 	if(geoLocation) {
+ 		try {
+ 			return await _getSocket(opts)
+@@ -231,14 +234,6 @@ async function _getSocket(
+ 	}: ExtraOpts,
+ ) {
+ 	const socket = new Socket()
+-	if((proxySessionId || geoLocation) && !HTTPS_PROXY_URL) {
+-		logger.warn(
+-			{ geoLocation, proxySessionId },
+-			'geoLocation or proxySessionId provided but no proxy URL found'
+-		)
+-		geoLocation = ''
+-		proxySessionId = ''
+-	}
+ 
+ 	if(!geoLocation && !proxySessionId) {
+ 		socket.connect({ host, port, })
+diff --git a/src/server/utils/claim-context-policy.ts b/src/server/utils/claim-context-policy.ts
+new file mode 100644
+index 0000000..e8e59ae
+--- /dev/null
++++ b/src/server/utils/claim-context-policy.ts
+@@ -0,0 +1,99 @@
++import { canonicalStringify } from '#src/utils/claims.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++const INPUT_KEYS = ['contextAddress', 'contextMessage', 'reclaimSessionId']
++const SIGNED_KEYS = [...INPUT_KEYS, 'providerHash', 'extractedParameters']
++const RESERVED_EXTRACTED_KEYS = new Set([...SIGNED_KEYS, 'attestationNonce', 'attestationNonceData'])
++const ADDRESS = /^0x[a-f0-9]{40}$/
++const HASH = /^0x[a-f0-9]{64}$/
++const DECIMAL = /^(0|[1-9][0-9]*)$/
++const MESSAGE = /^[\x20-\x21\x23-\x5b\x5d-\x7e]+$/
++const EXTRACTED_KEY = /^[a-z][a-z0-9_]{0,63}$/
++const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
++
++type InputContext = {
++	contextAddress: string
++	contextMessage: string
++	reclaimSessionId: string
++}
++
++function invalid(): never {
++	throw AttestorError.badRequest('Unsupported claim context')
++}
++
++function parseCanonicalObject(raw: unknown, keys: readonly string[]): Record<string, unknown> {
++	if(typeof raw !== 'string') return invalid()
++	let value: unknown
++	try {
++		value = JSON.parse(raw)
++	} catch {
++		return invalid()
++	}
++	if(!value || typeof value !== 'object' || Array.isArray(value)) return invalid()
++	const context = value as Record<string, unknown>
++	const actualKeys = Object.keys(context)
++	if(actualKeys.length !== keys.length || actualKeys.some(key => !keys.includes(key))) return invalid()
++	// A canonical byte comparison also rejects duplicate raw JSON keys before signing.
++	if(canonicalStringify(context) !== raw) return invalid()
++	return context
++}
++
++function assertAuctionMessage(value: unknown): asserts value is string {
++	if(typeof value !== 'string' || !MESSAGE.test(value)) return invalid()
++	const parts = value.split(':')
++	if(parts[1] !== '10143' || !ADDRESS.test(parts[2] ?? '')) return invalid()
++	if(parts[0] === 'register' && parts.length === 4 && parts[3]) return
++	if(parts[0] === 'bid' && parts.length === 6
++		&& DECIMAL.test(parts[3]) && DECIMAL.test(parts[4]) && parts[5]) return
++	return invalid()
++}
++
++// Generation-only sandbox challenge bound to the session wallet. The hook only accepts
++// register:/bid: prefixes, so a sandbox claim can never satisfy an auction.
++export function isSandboxContextMessage(value: unknown, contextAddress: string): value is string {
++	if(typeof value !== 'string') return false
++	const parts = value.split(':')
++	return parts.length === 4 && parts[0] === 'sandbox' && parts[1] === '10143'
++		&& parts[2] === contextAddress && UUID_V4.test(parts[3])
++}
++
++export function assertSupportedInputContext(raw: unknown, authIdentity: string | undefined): InputContext {
++	const input = parseCanonicalObject(raw, INPUT_KEYS)
++	if(typeof input.contextAddress !== 'string' || !ADDRESS.test(input.contextAddress)) return invalid()
++	if(!isSandboxContextMessage(input.contextMessage, input.contextAddress)) {
++		assertAuctionMessage(input.contextMessage)
++	}
++	if(!authIdentity || input.reclaimSessionId !== authIdentity) return invalid()
++	return {
++		contextAddress: input.contextAddress,
++		contextMessage: input.contextMessage,
++		reclaimSessionId: authIdentity
++	}
++}
++
++export function assertSupportedSignedContext(raw: unknown, input: InputContext): void {
++	if(typeof raw !== 'string') return invalid()
++	const signed = parseCanonicalObject(raw, SIGNED_KEYS)
++	for(const key of INPUT_KEYS) {
++		if(signed[key] !== input[key]) return invalid()
++	}
++	if(typeof signed.providerHash !== 'string' || !HASH.test(signed.providerHash)) return invalid()
++	const extracted = signed.extractedParameters
++	if(!extracted || typeof extracted !== 'object' || Array.isArray(extracted)) return invalid()
++	const entries = Object.entries(extracted)
++	if(!entries.length || entries.some(([key, value]) =>
++		!EXTRACTED_KEY.test(key) || RESERVED_EXTRACTED_KEYS.has(key)
++		|| typeof value !== 'string' || !value.trim().length)) return invalid()
++
++	// Claims.sol reads the first raw target, so each must identify this top-level value.
++	for(const key of ['contextAddress', 'contextMessage', 'providerHash'] as const) {
++		const target = `"${key}":"`
++		if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid()
++		const start = raw.indexOf(target) + target.length
++		if(start < target.length || raw.slice(start, raw.indexOf('"', start)) !== signed[key]) return invalid()
++	}
++	const target = '"extractedParameters":'
++	if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid()
++	const start = raw.indexOf(target) + target.length
++	if(start < target.length || !raw.startsWith(canonicalStringify(extracted), start)) return invalid()
++}
+diff --git a/src/server/utils/host-policy.ts b/src/server/utils/host-policy.ts
+new file mode 100644
+index 0000000..7953a55
+--- /dev/null
++++ b/src/server/utils/host-policy.ts
+@@ -0,0 +1,89 @@
++import { isIP } from 'node:net'
++
++import type { ProviderClaimInfo } from '#src/proto/api.ts'
++import { canonicalStringify } from '#src/utils/claims.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++const MAX_DNS_NAME_LENGTH = 253
++const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
++
++export function isCanonicalAuthHostname(host: unknown): host is string {
++	if(typeof host !== 'string' || host.length > MAX_DNS_NAME_LENGTH || isIP(host)) return false
++	if(host === 'localhost' || ['.localhost', '.local', '.internal'].some(suffix => host.endsWith(suffix))) return false
++	const labels = host.split('.')
++	if(labels.length < 2 || !labels.every(label => DNS_LABEL.test(label))) return false
++	try {
++		const url = new URL(`https://${host}`)
++		return url.hostname === host && !isIP(url.hostname)
++	} catch {
++		return false
++	}
++}
++
++export function assertCanonicalHostWhitelist(hostWhitelist: readonly string[]) {
++	if(!Array.isArray(hostWhitelist) || !hostWhitelist.length) {
++		throw AttestorError.badRequest('Authenticated host list is empty')
++	}
++	let previous: string | undefined
++	for(const entry of hostWhitelist) {
++		if(!isCanonicalAuthHostname(entry) || (previous !== undefined && previous >= entry)) {
++			throw AttestorError.badRequest('Authenticated host list is not canonical')
++		}
++		previous = entry
++	}
++}
++
++export function assertAuthenticatedTunnelHost(
++	hostWhitelist: readonly string[],
++	host: string,
++	port: number
++) {
++	assertCanonicalHostWhitelist(hostWhitelist)
++	if(port !== 443) throw AttestorError.badRequest('Authenticated tunnel requires port 443')
++	if(!hostWhitelist.includes(host)) throw AttestorError.badRequest('Host not allowed by auth request')
++}
++
++export function assertAuthenticatedClaimAuthority(
++	claim: ProviderClaimInfo,
++	hostWhitelist: readonly string[],
++	tunnelHost: string | undefined,
++	tunnelPort: number | undefined
++) {
++	if(!tunnelHost || tunnelPort === undefined) {
++		throw AttestorError.badRequest('Authenticated claim has no recorded tunnel authority')
++	}
++	assertAuthenticatedTunnelHost(hostWhitelist, tunnelHost, tunnelPort)
++	if(claim.provider !== 'http') {
++		throw AttestorError.badRequest('Authenticated claim provider is unsupported')
++	}
++
++	let params: unknown
++	try {
++		params = JSON.parse(claim.parameters)
++	} catch {
++		throw AttestorError.badRequest('Authenticated claim URL is invalid')
++	}
++	if(!params || typeof params !== 'object' || Array.isArray(params)
++		|| canonicalStringify(params) !== claim.parameters) {
++		throw AttestorError.badRequest('Authenticated claim parameters are not canonical')
++	}
++	const urlText = (params as { url?: unknown }).url
++	if(typeof urlText !== 'string') {
++		throw AttestorError.badRequest('Authenticated claim URL is invalid')
++	}
++	// Check raw authority before URL parsing can normalize case, IDNA, or default port.
++	const authority = /^https:\/\/([^/?#]+)(?:[/?#]|$)/.exec(urlText)?.[1]
++	if(authority !== tunnelHost && authority !== `${tunnelHost}:443`) {
++		throw AttestorError.badRequest('Authenticated claim authority differs from tunnel')
++	}
++	let url: URL
++	try {
++		url = new URL(urlText)
++	} catch {
++		throw AttestorError.badRequest('Authenticated claim URL is not canonical HTTPS on port 443')
++	}
++	if(
++		url.protocol !== 'https:' || url.hostname !== tunnelHost || url.port !== ''
++		|| url.username || url.password || url.hash
++	) throw AttestorError.badRequest('Authenticated claim URL is not canonical HTTPS on port 443')
++}
+diff --git a/src/tests/auth-signing-deadline.test.ts b/src/tests/auth-signing-deadline.test.ts
+index e2d5817..77ee1d8 100644
+--- a/src/tests/auth-signing-deadline.test.ts
++++ b/src/tests/auth-signing-deadline.test.ts
+@@ -2,12 +2,13 @@ import assert from 'node:assert/strict'
+ import { describe, it, mock } from 'node:test'
+ 
+ import { AttestorError } from '#src/utils/error.ts'
++import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ 
+ const claimInfo = {
+-	provider: 'http', parameters: '{}', context: '{}',
++	provider: 'http', parameters: '{"url":"https://example.com/"}', context: signedContext(),
+ 	owner: '0x0000000000000000000000000000000000000001',
+ 	timestampS: Math.floor(Date.now() / 1000)
+ }
+@@ -27,24 +28,8 @@ mock.module('#src/server/utils/assert-valid-claim-request.ts', {
+ 		}
+ 	}
+ })
+-mock.module('#src/server/utils/tee-verification.ts', {
+-	namedExports: {
+-		async verifyTeeBundle() {
+-			return { kOutputPayload: { timestampMs: claimInfo.timestampS * 1000 }, tOutputPayload: {} }
+-		}
+-	}
+-})
+-mock.module('#src/server/utils/tee-transcript-reconstruction.ts', {
+-	namedExports: {
+-		async reconstructTlsTranscript() {
+-			return { revealedRequest: new Uint8Array(), reconstructedResponse: new Uint8Array() }
+-		}
+-	}
+-})
+-
+-const [{ claimTunnel }, { claimTeeBundle }, { ServiceSignatureType, AttestorVersion, ClaimTunnelRequest, ClaimTeeBundleRequest }, { SIGNATURES }] = await Promise.all([
++const [{ claimTunnel }, { ServiceSignatureType, AttestorVersion, ClaimTunnelRequest }, { SIGNATURES }] = await Promise.all([
+ 	import('#src/server/handlers/claimTunnel.ts'),
+-	import('#src/server/handlers/claimTeeBundle.ts'),
+ 	import('#src/proto/api.ts'),
+ 	import('#src/utils/signatures/index.ts')
+ ])
+@@ -59,6 +44,8 @@ function deferred() {
+ function setup() {
+ 	let now = 9
+ 	const client = {
++		authIdentity: TEST_SESSION_ID,
++		authHostWhitelist: Object.freeze(['example.com']),
+ 		metadata: { signatureType, clientVersion: AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 		assertAuthActive() {
+ 			if(now >= 10) throw new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Authentication expired')
+@@ -73,16 +60,11 @@ function setup() {
+ 	return { client, expire: () => { now = 10 } }
+ }
+ 
+-function request(kind: 'tunnel' | 'tee', client: ReturnType<typeof setup>['client']) {
++function request(client: ReturnType<typeof setup>['client']) {
+ 	const ctx = { logger, client } as unknown as Parameters<typeof claimTunnel>[1]
+-	if(kind === 'tunnel') {
+-		return claimTunnel(ClaimTunnelRequest.create({
+-			request: { id: 1, host: 'example.com', port: 443 },
+-			data: { timestampS: claimInfo.timestampS }
+-		}), ctx)
+-	}
+-	return claimTeeBundle(ClaimTeeBundleRequest.create({
+-		verificationBundle: new Uint8Array(), data: { ...claimInfo }
++	return claimTunnel(ClaimTunnelRequest.create({
++		request: { id: 1, host: 'example.com', port: 443 },
++		data: { timestampS: claimInfo.timestampS, context: inputContext() }
+ 	}), ctx)
+ }
+ 
+@@ -90,8 +72,7 @@ function isAuthError(err: unknown) {
+ 	return err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED'
+ }
+ 
+-for(const kind of ['tunnel', 'tee'] as const) {
+-	describe(`${kind} auth deadline`, () => {
++describe('claimTunnel auth deadline', () => {
+ 		it('rejects when validation crosses the deadline before either signature', async() => {
+ 			const entered = deferred()
+ 			const release = deferred()
+@@ -99,7 +80,7 @@ for(const kind of ['tunnel', 'tee'] as const) {
+ 			const session = setup()
+ 			const sign = mock.method(SIGNATURES[signatureType], 'sign')
+ 			try {
+-				const pending = request(kind, session.client)
++				const pending = request(session.client)
+ 				await entered.promise
+ 				session.expire()
+ 				release.resolve()
+@@ -124,7 +105,7 @@ for(const kind of ['tunnel', 'tee'] as const) {
+ 					return new Uint8Array([1])
+ 				})
+ 				try {
+-					const pending = request(kind, session.client)
++					const pending = request(session.client)
+ 					await entered.promise
+ 					session.expire()
+ 					release.resolve()
+@@ -135,5 +116,4 @@ for(const kind of ['tunnel', 'tee'] as const) {
+ 				}
+ 			})
+ 		}
+-	})
+-}
++})
+diff --git a/src/tests/auth-socket-lifetime.test.ts b/src/tests/auth-socket-lifetime.test.ts
+index 6653e34..b63fb4c 100644
+--- a/src/tests/auth-socket-lifetime.test.ts
++++ b/src/tests/auth-socket-lifetime.test.ts
+@@ -47,6 +47,17 @@ it('rejects bad WS init and closes an active tunnel at fixed expiry despite acti
+ 		await assert.rejects(invalid.waitForInit(), isRejectedInit)
+ 		assert.equal(invalid.isInitialised, false)
+ 		assert.equal([...server.clients].some(ws => ws.serverSocket), false)
++		for(const hostWhitelist of [[], ['*.example.com'], ['API.example.com'],
++			['other.example.com', 'example.com'], ['example.com', 'example.com']]) {
++			const signed = await createAuthRequest({ id: 'bad-hosts', hostWhitelist }, key.privateKey)
++			const rejected = new AttestorClient({ url, authRequest: signed })
++			try {
++				await assert.rejects(rejected.waitForInit(),
++					(err: AttestorError) => err.code === 'ERROR_BAD_REQUEST')
++			} finally {
++				await rejected.terminateConnection()
++			}
++		}
+ 
+ 		const expiresAt = Math.floor(Date.now() / 1000) + 3
+ 		const authA = await createAuthRequest(
+diff --git a/src/tests/claim-epoch.test.ts b/src/tests/claim-epoch.test.ts
+index 6a5050f..372fa5d 100644
+--- a/src/tests/claim-epoch.test.ts
++++ b/src/tests/claim-epoch.test.ts
+@@ -2,15 +2,16 @@ import assert from 'node:assert/strict'
+ import { spawnSync } from 'node:child_process'
+ import { describe, it, mock } from 'node:test'
+ 
+-import type { ClaimTeeBundleResponse, ClaimTunnelResponse } from '#src/proto/api.ts'
++import type { ClaimTunnelResponse } from '#src/proto/api.ts'
++import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ 
+ const claimInfo = {
+ 	provider: 'http',
+-	parameters: '{}',
+-	context: '{}',
++	parameters: '{"url":"https://example.com/"}',
++	context: signedContext(),
+ 	owner: '0x0000000000000000000000000000000000000001',
+ 	timestampS: Math.floor(Date.now() / 1000)
+ }
+@@ -23,24 +24,6 @@ mock.module('#src/server/utils/assert-valid-claim-request.ts', {
+ 		async assertValidProviderTranscript() { return { ...claimInfo } }
+ 	}
+ })
+-mock.module('#src/server/utils/tee-verification.ts', {
+-	namedExports: {
+-		async verifyTeeBundle() {
+-			return {
+-				kOutputPayload: { timestampMs: claimInfo.timestampS * 1000 },
+-				tOutputPayload: {}
+-			}
+-		}
+-	}
+-})
+-mock.module('#src/server/utils/tee-transcript-reconstruction.ts', {
+-	namedExports: {
+-		async reconstructTlsTranscript() {
+-			return { revealedRequest: new Uint8Array(), reconstructedResponse: new Uint8Array() }
+-		}
+-	}
+-})
+-
+ const [{ parseClaimEpoch }, { claimTunnel }, { claimTeeBundle }, proto, claims, signatures] = await Promise.all([
+ 	import('#src/config/claim-epoch.ts'),
+ 	import('#src/server/handlers/claimTunnel.ts'),
+@@ -53,6 +36,8 @@ const signatureType = proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH
+ const verify = signatures.SIGNATURES[signatureType].verify
+ const wrongSigner = '0x0000000000000000000000000000000000000002'
+ const client = {
++	authIdentity: TEST_SESSION_ID,
++	authHostWhitelist: Object.freeze(['example.com']),
+ 	metadata: { signatureType, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 	assertAuthActive() {},
+ 	getTunnel() {
+@@ -65,12 +50,7 @@ const client = {
+ 	removeTunnel() {}
+ }
+ 
+-type SignedResponse = ClaimTunnelResponse | ClaimTeeBundleResponse
+-
+-async function assertSignatures<T extends SignedResponse>(
+-	res: T,
+-	codec: { encode(message: T): { finish(): Uint8Array } }
+-) {
++async function assertSignatures(res: ClaimTunnelResponse) {
+ 	const claim = res.claim
+ 	const signature = res.signatures
+ 	assert.ok(claim)
+@@ -81,14 +61,14 @@ async function assertSignatures<T extends SignedResponse>(
+ 	const address = signature.attestorAddress
+ 	const claimBytes = new TextEncoder().encode(claims.createSignDataForClaim(claim))
+ 	assert.equal(await verify(claimBytes, signature.claimSignature, address), true)
+-	assert.equal(await verify(codec.encode({ ...res, signatures: undefined }).finish(), signature.resultSignature, address), true)
++	assert.equal(await verify(proto.ClaimTunnelResponse.encode({ ...res, signatures: undefined }).finish(), signature.resultSignature, address), true)
+ 	assert.equal(await verify(claimBytes, signature.claimSignature, wrongSigner), false)
+-	assert.equal(await verify(codec.encode({ ...res, signatures: undefined }).finish(), signature.resultSignature, wrongSigner), false)
++	assert.equal(await verify(proto.ClaimTunnelResponse.encode({ ...res, signatures: undefined }).finish(), signature.resultSignature, wrongSigner), false)
+ 	const tamperedClaim = { ...claim, epoch: 3 }
+-	const tampered = { ...res, claim: tamperedClaim, signatures: undefined } as T
++	const tampered = { ...res, claim: tamperedClaim, signatures: undefined }
+ 	const tamperedClaimBytes = new TextEncoder().encode(claims.createSignDataForClaim(tamperedClaim))
+ 	assert.equal(await verify(tamperedClaimBytes, signature.claimSignature, address), false)
+-	assert.equal(await verify(codec.encode(tampered).finish(), signature.resultSignature, address), false)
++	assert.equal(await verify(proto.ClaimTunnelResponse.encode(tampered).finish(), signature.resultSignature, address), false)
+ }
+ 
+ describe('CLAIM_EPOCH', () => {
+@@ -112,18 +92,17 @@ describe('CLAIM_EPOCH', () => {
+ 		}
+ 	})
+ 
+-	it('stamps and signs both claimTunnel and claimTeeBundle at epoch 2', async () => {
++	it('stamps and signs claimTunnel at epoch 2 in the hardened layer', async () => {
+ 		const ctx = { logger, client } as unknown as Parameters<typeof claimTunnel>[1]
+ 		const tunnel = await claimTunnel(proto.ClaimTunnelRequest.create({
+ 			request: { id: 1, host: 'example.com', port: 443 },
+-			data: { timestampS: claimInfo.timestampS }
++			data: { timestampS: claimInfo.timestampS, context: inputContext() }
+ 		}), ctx)
+-		await assertSignatures(tunnel, proto.ClaimTunnelResponse)
++		await assertSignatures(tunnel)
+ 
+-		const tee = await claimTeeBundle(proto.ClaimTeeBundleRequest.create({
++		await assert.rejects(claimTeeBundle(proto.ClaimTeeBundleRequest.create({
+ 			verificationBundle: new Uint8Array(),
+ 			data: { ...claimInfo }
+-		}), ctx)
+-		await assertSignatures(tee, proto.ClaimTeeBundleResponse)
++		}), ctx), /verified endpoint binding/)
+ 	})
+ })
+diff --git a/src/tests/extracted-key.test.ts b/src/tests/extracted-key.test.ts
+new file mode 100644
+index 0000000..a123f91
+--- /dev/null
++++ b/src/tests/extracted-key.test.ts
+@@ -0,0 +1,29 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { it } from 'node:test'
++
++import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
++import { inputContext, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++
++// Value-equal to @umia/types proof-context.extraction-key-vectors.json; a repo test enforces it.
++const keys = JSON.parse(
++	readFileSync(new URL('./fixtures/extracted-key-vectors.json', import.meta.url), 'utf8')
++) as { accepted: string[], rejected: string[] }
++
++function signed(key: string) {
++	return JSON.stringify({
++		contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++		extractedParameters: { [key]: 'synthetic' },
++		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
++	})
++}
++
++it('signs exactly the shared extraction key vectors', () => {
++	const input = assertSupportedInputContext(inputContext(), TEST_SESSION_ID)
++	for(const key of keys.accepted) {
++		assert.doesNotThrow(() => assertSupportedSignedContext(signed(key), input), key)
++	}
++	for(const key of keys.rejected) {
++		assert.throws(() => assertSupportedSignedContext(signed(key), input), /Unsupported claim context/, key)
++	}
++})
+diff --git a/src/tests/fixtures/extracted-key-vectors.json b/src/tests/fixtures/extracted-key-vectors.json
+new file mode 100644
+index 0000000..e3365e4
+--- /dev/null
++++ b/src/tests/fixtures/extracted-key-vectors.json
+@@ -0,0 +1,14 @@
++{
++  "accepted": ["handle", "a", "account_id", "user2", "a00000000000000000000000000000000000000000000000000000000000000b"],
++  "rejected": [
++    "FIXTURE_HANDLE_SECRET",
++    "Handle",
++    "handleSecret",
++    "_handle",
++    "2handle",
++    "handle-id",
++    "handle.id",
++    "",
++    "a000000000000000000000000000000000000000000000000000000000000000c"
++  ]
++}
+diff --git a/src/tests/fixtures/sandbox-context-vectors.json b/src/tests/fixtures/sandbox-context-vectors.json
+new file mode 100644
+index 0000000..9a840e1
+--- /dev/null
++++ b/src/tests/fixtures/sandbox-context-vectors.json
+@@ -0,0 +1,28 @@
++{
++  "chainId": 10143,
++  "contextAddress": "0x00000000000000000000000000000000000000a1",
++  "accepted": [
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:00000000-0000-4000-8000-000000000000",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:ffffffff-ffff-4fff-bfff-ffffffffffff"
++  ],
++  "rejected": [
++    "Auction verification",
++    "test-only sandbox run:alpha",
++    "register:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "bid:10143:0x00000000000000000000000000000000000000a1:0:1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:84532:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:010143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000a2:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000A1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3F2B6C1E-8D4A-4B7C-9E2F-1A2B3C4D5E6F",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-1b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-7e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f:x",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f ",
++    " sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f",
++    "sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e8d4a4b7c9e2f1a2b3c4d5e6f",
++    "Sandbox:10143:0x00000000000000000000000000000000000000a1:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f"
++  ]
++}
+diff --git a/src/tests/host-extraction-provenance.test.ts b/src/tests/host-extraction-provenance.test.ts
+new file mode 100644
+index 0000000..2b93f5f
+--- /dev/null
++++ b/src/tests/host-extraction-provenance.test.ts
+@@ -0,0 +1,55 @@
++import assert from 'node:assert/strict'
++import { it, mock } from 'node:test'
++
++import { providers } from '#src/providers/index.ts'
++import { assertValidProviderTranscript } from '#src/server/utils/assert-valid-claim-request.ts'
++import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
++import { inputContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++
++const logger = { info() {}, debug() {}, warn() {}, error() {} }
++const parameters = JSON.stringify({
++	url: 'https://api.example.com/path', method: 'GET',
++	responseMatches: [{ type: 'contains', value: 'synthetic-ok' }]
++})
++
++function claim() {
++	return {
++		provider: 'http', parameters, context: inputContext(),
++		owner: '0x0000000000000000000000000000000000000001', timestampS: 1
++	}
++}
++
++it('requires nonempty mocked provider extraction through real context mutation', async() => {
++	const receipt = mock.method(providers.http, 'assertValidProviderReceipt', async() => ({
++		extractedParameters: { account: 'synthetic-commitment' }
++	}))
++	try {
++		const result = await assertValidProviderTranscript(
++			[], { clientVersion: 1 } as any, claim() as any,
++			logger as any, { version: 1 } as any
++		)
++		assert.equal(receipt.mock.calls.length, 1)
++		assertSupportedSignedContext(result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID))
++		assert.deepEqual(JSON.parse(result.context).extractedParameters,
++			{ account: 'synthetic-commitment' })
++	} finally {
++		receipt.mock.restore()
++	}
++
++	const emptyReceipt = mock.method(providers.http, 'assertValidProviderReceipt', async() => ({
++		extractedParameters: {}
++	}))
++	try {
++		const result = await assertValidProviderTranscript(
++			[], { clientVersion: 1 } as any, claim() as any,
++			logger as any, { version: 1 } as any
++		)
++		assert.equal(emptyReceipt.mock.calls.length, 1)
++		assert.equal(Object.hasOwn(JSON.parse(result.context), 'extractedParameters'), false)
++		assert.throws(() => assertSupportedSignedContext(
++			result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID)
++		), /Unsupported claim context/)
++	} finally {
++		emptyReceipt.mock.restore()
++	}
++})
+diff --git a/src/tests/host-policy.test.ts b/src/tests/host-policy.test.ts
+new file mode 100644
+index 0000000..5b4995a
+--- /dev/null
++++ b/src/tests/host-policy.test.ts
+@@ -0,0 +1,262 @@
++import assert from 'node:assert/strict'
++import { it, mock } from 'node:test'
++
++import type { makeTcpTunnel } from '#src/server/tunnels/make-tcp-tunnel.ts'
++import { ClaimTunnelRequest, ClaimTunnelResponse, CreateTunnelRequest, ServiceSignatureType } from '#src/proto/api.ts'
++import type { ProviderClaimInfo } from '#src/proto/api.ts'
++import { canonicalStringify, createSignDataForClaim } from '#src/utils/claims.ts'
++import { SIGNATURES } from '#src/utils/signatures/index.ts'
++import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
++import { inputContext, signedContext, TEST_AUCTION_ADDRESS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++
++let dialCount = 0
++mock.module('#src/server/tunnels/make-tcp-tunnel.ts', {
++	namedExports: {
++		async makeTcpTunnel(opts: Parameters<typeof makeTcpTunnel>[0]) {
++			dialCount++
++			return { createRequest: opts, transcript: [], async close() {} }
++		}
++	}
++})
++
++let validatedClaim: ProviderClaimInfo = {
++	provider: 'http', parameters: JSON.stringify({ url: 'https://api.example.com/path' }),
++	context: signedContext(), owner: '0x0000000000000000000000000000000000000001',
++	timestampS: Math.floor(Date.now() / 1000)
++}
++mock.module('#src/server/utils/assert-valid-claim-request.ts', {
++	namedExports: {
++		assertTranscriptsMatch() {},
++		async assertValidClaimRequest() { return { ...validatedClaim } },
++		async assertValidProviderTranscript() { return { ...validatedClaim } }
++	}
++})
++
++const [{ createTunnel }, { claimTunnel }, { claimTeeBundle }, policy] = await Promise.all([
++	import('#src/server/handlers/createTunnel.ts'),
++	import('#src/server/handlers/claimTunnel.ts'),
++	import('#src/server/handlers/claimTeeBundle.ts'),
++	import('#src/server/utils/host-policy.ts')
++])
++const logger = { info() {}, debug() {}, warn() {}, error() {} }
++const whitelist = Object.freeze(['api.example.com', 'xn--bcher-kva.example'])
++
++function client(hosts: readonly string[] = whitelist) {
++	return {
++		tunnels: {}, isOpen: true, authHostWhitelist: hosts, authIdentity: TEST_SESSION_ID,
++		assertAuthActive() {}, async sendMessage() {},
++		metadata: { signatureType: ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH },
++		getTunnel() {
++			return {
++				createRequest: { host: 'api.example.com', port: 443, geoLocation: '', proxySessionId: '' },
++				transcript: [], async close() {}
++			}
++		},
++		removeTunnel() {}
++	}
++}
++
++it('admits only canonical exact sorted signed DNS names', () => {
++	for(const host of ['api.example.com', 'xn--bcher-kva.example']) {
++		assert.equal(policy.isCanonicalAuthHostname(host), true)
++	}
++	for(const host of [
++		'API.example.com', 'bücher.example', '*.example.com', '.example.com',
++		'api..example.com', 'api.example.com.', 'api_example.com',
++		'localhost', 'foo.localhost', 'foo.local', 'foo.internal',
++		'127.0.0.1', '0127.0.0.1', '[::1]', 'api.example.com:443',
++		'a'.repeat(64) + '.example.com'
++	]) assert.equal(policy.isCanonicalAuthHostname(host), false, host)
++	policy.assertCanonicalHostWhitelist(whitelist)
++	for(const list of [[], ['api.example.com', 'api.example.com'],
++		['xn--bcher-kva.example', 'api.example.com'], ['*.example.com'],
++		['API.example.com'], ['127.0.0.1']]) {
++		assert.throws(() => policy.assertCanonicalHostWhitelist(list))
++	}
++})
++
++it('rejects empty, malformed, unlisted, and non-443 tunnel requests before dialing', async() => {
++	const bad = [
++		{ hosts: [], host: 'api.example.com', port: 443 },
++		{ hosts: ['*.example.com'], host: 'api.example.com', port: 443 },
++		{ hosts: whitelist, host: 'other.example.com', port: 443 },
++		{ hosts: whitelist, host: 'api.example.com', port: 8443 },
++		{ hosts: whitelist, host: 'api.example.com', port: 80, geoLocation: 'US' },
++		{ hosts: whitelist, host: 'api.example.com', port: 8443, proxySessionId: 'session123' }
++	]
++	for(const [index, request] of bad.entries()) {
++		dialCount = 0
++		await assert.rejects(createTunnel(CreateTunnelRequest.create({ id: index + 1, ...request }),
++			{ client: client(request.hosts), logger } as any))
++		assert.equal(dialCount, 0)
++	}
++	dialCount = 0
++	await createTunnel(CreateTunnelRequest.create({ id: 99, host: 'api.example.com', port: 443 }),
++		{ client: client(), logger } as any)
++	assert.equal(dialCount, 1)
++})
++
++it('binds signed HTTPS authority to recorded tunnel host and port before both signatures', async() => {
++	const ctx = { client: client(), logger } as any
++	const req = ClaimTunnelRequest.create({
++		request: { id: 1, host: 'api.example.com', port: 443 },
++		data: { timestampS: validatedClaim.timestampS, context: inputContext() }
++	})
++	const verify = SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH].verify
++	for(const url of ['https://api.example.com/path', 'https://api.example.com:443/path']) {
++		const parameters = canonicalStringify({ url, method: 'GET',
++			responseMatches: [{ type: 'contains', value: 'ok' }], responseRedactions: [] })
++		validatedClaim = { ...validatedClaim, parameters }
++		const result = await claimTunnel(req, ctx)
++		assert.ok(result.claim && result.signatures)
++		assert.equal(result.claim.context, signedContext())
++		for(const key of ['contextAddress', 'contextMessage', 'providerHash']) {
++			const target = `"${key}":"`
++			const start = result.claim.context.indexOf(target) + target.length
++			assert.equal(result.claim.context.indexOf(target), result.claim.context.lastIndexOf(target))
++			assert.equal(result.claim.context.slice(start, result.claim.context.indexOf('"', start)), JSON.parse(result.claim.context)[key])
++		}
++		assert.ok(result.claim.context.includes('"extractedParameters":{"account":"synthetic-commitment"}'))
++		assert.equal(result.claim.epoch, 2)
++		const { claimSignature, resultSignature, attestorAddress } = result.signatures
++		assert.equal(await verify(new TextEncoder().encode(createSignDataForClaim(result.claim)), claimSignature, attestorAddress), true)
++		assert.equal(await verify(ClaimTunnelResponse.encode({ ...result, signatures: undefined }).finish(), resultSignature, attestorAddress), true)
++	}
++	for(const url of [
++		'https://other.example.com/path', 'https://api.example.com:8443/path',
++		'http://api.example.com/path', 'https://API.example.com/path',
++		'https://user@api.example.com/path', 'https://api.example.com/path#fragment'
++	]) {
++		validatedClaim = { ...validatedClaim, parameters: JSON.stringify({ url }) }
++		const sign = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'sign')
++		try {
++			await assert.rejects(claimTunnel(req, ctx), /Authenticated claim/)
++			assert.equal(sign.mock.calls.length, 0)
++		} finally {
++			sign.mock.restore()
++		}
++	}
++	for(const parameters of [
++		'{"url":"https://evil.example/","url":"https://api.example.com/"}',
++		'{"url":"https://api.example.com/","url":"https://evil.example/"}'
++	]) {
++		validatedClaim = { ...validatedClaim, parameters }
++		const sign = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'sign')
++		try {
++			await assert.rejects(claimTunnel(req, ctx), /Authenticated claim/)
++			assert.equal(sign.mock.calls.length, 0)
++		} finally {
++			sign.mock.restore()
++		}
++	}
++	for(const update of [
++		{ provider: 'http', parameters: '{}' },
++		{ provider: 'dns', parameters: JSON.stringify({ url: 'https://api.example.com/' }) }
++	]) {
++		validatedClaim = { ...validatedClaim, ...update }
++		const sign = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'sign')
++		try {
++			await assert.rejects(claimTunnel(req, ctx), /Authenticated claim/)
++			assert.equal(sign.mock.calls.length, 0)
++		} finally {
++			sign.mock.restore()
++		}
++	}
++})
++
++it('rejects ambiguous or unsupported context before claim and result signatures', async() => {
++	validatedClaim = {
++		...validatedClaim,
++		provider: 'http', parameters: JSON.stringify({ url: 'https://api.example.com/path' }),
++		context: signedContext()
++	}
++	const context = { client: client(), logger } as any
++	const request = (raw: string) => ClaimTunnelRequest.create({
++		request: { id: 1, host: 'api.example.com', port: 443 },
++		data: { timestampS: validatedClaim.timestampS, context: raw }
++	})
++	const rejectedInput = [
++		'{}',
++		JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++			reclaimSessionId: TEST_SESSION_ID, extra: 'client-field' }),
++		JSON.stringify({ aa: { contextAddress: TEST_CONTEXT_ADDRESS, extractedParameters: { account: 'decoy' } },
++			contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++			reclaimSessionId: TEST_SESSION_ID }),
++		inputContext('different-session'),
++		inputContext().replace(TEST_CONTEXT_ADDRESS, '0xABCDEF0000000000000000000000000000000000'),
++		inputContext().replace(TEST_CONTEXT_MESSAGE, 'Auction verification'),
++		inputContext().replace(TEST_CONTEXT_MESSAGE, `${TEST_CONTEXT_MESSAGE}\\escape`),
++		inputContext().replace('"reclaimSessionId":', '"contextAddress":"0x0000000000000000000000000000000000000000","reclaimSessionId":'),
++		JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++			reclaimSessionId: TEST_SESSION_ID, attestationNonce: 'unsupported' }),
++		JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++			extractedParameters: { account: 'client-forged' }, reclaimSessionId: TEST_SESSION_ID }),
++		JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++			providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID })
++	]
++	for(const raw of rejectedInput) {
++		const sign = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'sign')
++		try {
++			await assert.rejects(claimTunnel(request(raw), context), /Unsupported claim context/)
++			assert.equal(sign.mock.calls.length, 0)
++		} finally {
++			sign.mock.restore()
++		}
++	}
++
++	const validInput = request(inputContext())
++	const parsed = JSON.parse(signedContext())
++	const rejectedSigned = [
++		'{}',
++		JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
++			providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID }),
++		JSON.stringify({ ...parsed, extractedParameters: {} }),
++		JSON.stringify({ ...parsed, extractedParameters: { account: '' } }),
++		JSON.stringify({ ...parsed, extractedParameters: { account: ' ' } }),
++		JSON.stringify({ ...parsed, extractedParameters: { account: { nested: 'decoy' } } }),
++		JSON.stringify({ ...parsed, extractedParameters: { contextAddress: 'decoy' } }),
++		JSON.stringify({ ...parsed, extractedParameters: { attestationNonce: 'decoy' } }),
++		JSON.stringify({ ...parsed, providerHash: TEST_PROVIDER_HASH.toUpperCase() }),
++		JSON.stringify({ ...parsed, aa: { contextAddress: TEST_CONTEXT_ADDRESS,
++			extractedParameters: { account: 'decoy' } } })
++	]
++	for(const raw of rejectedSigned) {
++		validatedClaim = { ...validatedClaim, context: raw }
++		const sign = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'sign')
++		try {
++			await assert.rejects(claimTunnel(validInput, context), /Unsupported claim context/)
++			assert.equal(sign.mock.calls.length, 0)
++		} finally {
++			sign.mock.restore()
++		}
++	}
++	validatedClaim = { ...validatedClaim, context: signedContext() }
++})
++
++it('accepts the hook-supported canonical bid context with one raw target each', () => {
++	const message = `bid:10143:${TEST_AUCTION_ADDRESS}:1:100:nonce`
++	const input = JSON.stringify({
++		contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: message,
++		reclaimSessionId: TEST_SESSION_ID
++	})
++	const signed = JSON.stringify({
++		contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: message,
++		extractedParameters: { account: 'synthetic-commitment' },
++		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
++	})
++	assertSupportedSignedContext(signed, assertSupportedInputContext(input, TEST_SESSION_ID))
++})
++
++it('rejects TEE before verification, either signature, or a useful response', async() => {
++	const sign = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'sign')
++	try {
++		await assert.rejects(claimTeeBundle({} as any, { client: client(), logger } as any),
++			(err: any) => err.code === 'ERROR_BAD_REQUEST' && /verified endpoint binding/.test(err.message))
++		assert.equal(sign.mock.calls.length, 0)
++	} finally {
++		sign.mock.restore()
++	}
++})
+diff --git a/src/tests/host-sni-rejection.test.ts b/src/tests/host-sni-rejection.test.ts
+new file mode 100644
+index 0000000..d1a40db
+--- /dev/null
++++ b/src/tests/host-sni-rejection.test.ts
+@@ -0,0 +1,37 @@
++import assert from 'node:assert/strict'
++import { it, mock } from 'node:test'
++
++import { ClaimTunnelRequest, ServiceSignatureType, ZKProofEngine } from '#src/proto/api.ts'
++import { SIGNATURES } from '#src/utils/signatures/index.ts'
++
++mock.module('#src/server/utils/process-handshake.ts', {
++	namedExports: {
++		async processHandshake() {
++			return {
++				hostname: 'other.example.com', tlsVersion: 'TLS1_3',
++				cipherSuite: 'TLS_AES_128_GCM_SHA256', nextMsgIndex: 0
++			}
++		}
++	}
++})
++const { assertValidClaimRequest } = await import('#src/server/utils/assert-valid-claim-request.ts')
++const logger = { info() {}, debug() {}, warn() {}, error() {} } as any
++
++it('rejects verified TLS SNI that differs from the recorded tunnel host', async() => {
++	const verify = mock.method(SIGNATURES[ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH], 'verify', async() => true)
++	try {
++		const request = ClaimTunnelRequest.create({
++			request: { id: 1, host: 'api.example.com', port: 443 },
++			data: { owner: '0x0000000000000000000000000000000000000001' },
++			signatures: { requestSignature: new Uint8Array([1]) },
++			zkEngine: ZKProofEngine.ZK_ENGINE_GNARK,
++			transcript: []
++		})
++		await assert.rejects(
++			assertValidClaimRequest(request, { signatureType: ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH } as any, logger),
++			/Expected server name api.example.com, got other.example.com/
++		)
++	} finally {
++		verify.mock.restore()
++	}
++})
+diff --git a/src/tests/host-tunnel-configured-proxy.test.ts b/src/tests/host-tunnel-configured-proxy.test.ts
+new file mode 100644
+index 0000000..8e524df
+--- /dev/null
++++ b/src/tests/host-tunnel-configured-proxy.test.ts
+@@ -0,0 +1,67 @@
++import assert from 'node:assert/strict'
++import { Socket } from 'node:net'
++import { it, mock } from 'node:test'
++import { Wallet } from 'ethers'
++
++process.env.PRIVATE_KEY = Wallet.createRandom().privateKey
++process.env.CLAIM_EPOCH = '2'
++process.env.HTTPS_PROXY_URL = 'http://127.0.0.1:1/{{geoLocation}}{{proxySessionId}}'
++delete process.env.ALLOWED_DIRECT_HOSTS
++
++let resolved: string[] = []
++let dnsCalls = 0
++const proxyCalls: Array<{ host: string, port: number }> = []
++mock.module('#src/server/utils/dns.ts', {
++	namedExports: { async resolveHostnames() { dnsCalls++; return resolved } }
++})
++mock.module('https-proxy-agent', {
++	namedExports: {
++		HttpsProxyAgent: class {
++			constructor(_url: string) {}
++			async connect(socket: Socket, opts: { host: string, port: number }) {
++				proxyCalls.push({ host: opts.host, port: opts.port })
++				process.nextTick(() => socket.emit('proxyConnect', { statusCode: 200, statusText: 'OK', headers: {} }))
++				return socket
++			}
++		}
++	}
++})
++const connectMock = mock.method(Socket.prototype, 'connect', () => {
++	throw new Error('unexpected direct socket connection')
++})
++const { makeTcpTunnel } = await import('#src/server/tunnels/make-tcp-tunnel.ts')
++const logger = { info() {}, debug() {}, warn() {}, error() {} } as any
++
++it('configured geo proxy delegates original hostname and port without local DNS', async() => {
++	dnsCalls = 0
++	proxyCalls.length = 0
++	const tunnel = await makeTcpTunnel({
++		host: 'reviewed.example', port: 443, geoLocation: 'US', logger
++	} as any)
++	assert.equal(dnsCalls, 0)
++	assert.deepEqual(proxyCalls, [{ host: 'reviewed.example', port: 443 }])
++	tunnel.close()
++})
++
++it('configured geo and session proxy delegates original hostname without local DNS', async() => {
++	dnsCalls = 0
++	proxyCalls.length = 0
++	const tunnel = await makeTcpTunnel({
++		host: 'reviewed.example', port: 443, geoLocation: 'US', proxySessionId: 'session123', logger
++	} as any)
++	assert.equal(dnsCalls, 0)
++	assert.deepEqual(proxyCalls, [{ host: 'reviewed.example', port: 443 }])
++	tunnel.close()
++})
++
++it('session-only configured path does not reach proxy or direct socket', async() => {
++	resolved = ['10.0.0.1', '8.8.8.8']
++	dnsCalls = 0
++	proxyCalls.length = 0
++	await assert.rejects(makeTcpTunnel({
++		host: 'reviewed.example', port: 443, proxySessionId: 'session123', logger
++	} as any))
++	assert.equal(dnsCalls, 1)
++	assert.deepEqual(proxyCalls, [])
++	connectMock.mock.restore()
++})
+diff --git a/src/tests/host-tunnel-empty-proxy.test.ts b/src/tests/host-tunnel-empty-proxy.test.ts
+new file mode 100644
+index 0000000..9ec6137
+--- /dev/null
++++ b/src/tests/host-tunnel-empty-proxy.test.ts
+@@ -0,0 +1,42 @@
++import assert from 'node:assert/strict'
++import { Socket } from 'node:net'
++import { it, mock } from 'node:test'
++import { Wallet } from 'ethers'
++
++process.env.PRIVATE_KEY = Wallet.createRandom().privateKey
++process.env.CLAIM_EPOCH = '2'
++process.env.HTTPS_PROXY_URL = ''
++delete process.env.ALLOWED_DIRECT_HOSTS
++
++let resolveCalls = 0
++let socketCalls = 0
++mock.module('#src/server/utils/dns.ts', {
++	namedExports: { async resolveHostnames() { resolveCalls++; return ['8.8.8.8'] } }
++})
++const connectMock = mock.method(Socket.prototype, 'connect', function(this: Socket) {
++	socketCalls++
++	setImmediate(() => this.emit('connect'))
++	return this
++})
++const { makeTcpTunnel } = await import('#src/server/tunnels/make-tcp-tunnel.ts')
++const logger = { info() {}, debug() {}, warn() {}, error() {} } as any
++
++it('empty proxy configuration fails closed for geo and session options before DNS or socket', async() => {
++	for(const extra of [{ geoLocation: 'US' }, { proxySessionId: 'session123' }]) {
++		resolveCalls = 0
++		socketCalls = 0
++		await assert.rejects(
++			makeTcpTunnel({ host: 'reviewed.example', port: 443, logger, ...extra } as any),
++			/requires HTTPS_PROXY_URL/
++		)
++		assert.equal(resolveCalls, 0)
++		assert.equal(socketCalls, 0)
++	}
++	resolveCalls = 0
++	socketCalls = 0
++	const direct = await makeTcpTunnel({ host: 'reviewed.example', port: 443, logger } as any)
++	assert.equal(resolveCalls, 1)
++	assert.equal(socketCalls, 1)
++	direct.close()
++	connectMock.mock.restore()
++})
+diff --git a/src/tests/host-tunnel-unset-proxy.test.ts b/src/tests/host-tunnel-unset-proxy.test.ts
+new file mode 100644
+index 0000000..5bf8114
+--- /dev/null
++++ b/src/tests/host-tunnel-unset-proxy.test.ts
+@@ -0,0 +1,34 @@
++import assert from 'node:assert/strict'
++import { Socket } from 'node:net'
++import { it, mock } from 'node:test'
++
++process.env.CLAIM_EPOCH = '2'
++delete process.env.HTTPS_PROXY_URL
++delete process.env.ALLOWED_DIRECT_HOSTS
++
++let resolveCalls = 0
++let socketCalls = 0
++mock.module('#src/server/utils/dns.ts', {
++	namedExports: { async resolveHostnames() { resolveCalls++; return ['8.8.8.8'] } }
++})
++const connectMock = mock.method(Socket.prototype, 'connect', function(this: Socket) {
++	socketCalls++
++	setImmediate(() => this.emit('connect'))
++	return this
++})
++const { makeTcpTunnel } = await import('#src/server/tunnels/make-tcp-tunnel.ts')
++const logger = { info() {}, debug() {}, warn() {}, error() {} } as any
++
++it('unset proxy configuration fails closed before DNS or direct socket', async() => {
++	for(const extra of [{ geoLocation: 'US' }, { proxySessionId: 'session123' }]) {
++		resolveCalls = 0
++		socketCalls = 0
++		await assert.rejects(
++			makeTcpTunnel({ host: 'reviewed.example', port: 443, logger, ...extra } as any),
++			/requires HTTPS_PROXY_URL/
++		)
++		assert.equal(resolveCalls, 0)
++		assert.equal(socketCalls, 0)
++	}
++	connectMock.mock.restore()
++})
+diff --git a/src/tests/log-privacy.test.ts b/src/tests/log-privacy.test.ts
+index 430dfd9..90a0349 100644
+--- a/src/tests/log-privacy.test.ts
++++ b/src/tests/log-privacy.test.ts
+@@ -4,6 +4,8 @@ import { Writable } from 'node:stream'
+ import { setTimeout as delay } from 'node:timers/promises'
+ import { it, mock } from 'node:test'
+ import { Wallet } from 'ethers'
++import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { canonicalStringify } from '#src/utils/claims.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+@@ -16,12 +18,11 @@ const canaries = {
+ 	error: 'CANARY_ERROR_PRIVATE', key: 'CANARY_KEY_PRIVATE'
+ }
+ const claimInfo = {
+-	provider: 'http', parameters: JSON.stringify({ secret: canaries.account }),
+-	context: JSON.stringify({ proof: canaries.proof }), owner: canaries.account,
++	provider: 'http', parameters: canonicalStringify({ url: 'https://example.com/', secret: canaries.account }),
++	context: signedContext(canaries.proof), owner: canaries.account,
+ 	timestampS: Math.floor(Date.now() / 1000)
+ }
+ let failTunnel = false
+-let failTee = false
+ const nestedError = Object.assign(new Error(canaries.error), {
+ 	cause: { message: canaries.key, headers: { cookie: canaries.headers }, nested: new Error(canaries.proof) }
+ })
+@@ -34,26 +35,10 @@ mock.module('#src/server/utils/assert-valid-claim-request.ts', {
+ 			return { ...claimInfo }
+ 		},
+ 		async assertValidProviderTranscript() {
+-			if(failTee) throw nestedError
+ 			return { ...claimInfo }
+ 		}
+ 	}
+ })
+-mock.module('#src/server/utils/tee-verification.ts', {
+-	namedExports: {
+-		async verifyTeeBundle() {
+-			return { kOutputPayload: { timestampMs: claimInfo.timestampS * 1000 }, tOutputPayload: {} }
+-		}
+-	}
+-})
+-mock.module('#src/server/utils/tee-transcript-reconstruction.ts', {
+-	namedExports: {
+-		async reconstructTlsTranscript() {
+-			return { revealedRequest: new Uint8Array(), reconstructedResponse: new Uint8Array() }
+-		}
+-	}
+-})
+-
+ const [loggerModule, { AttestorClient }, { WS_PATHNAME }, { createServer }, { getRandomPort }, { createAuthRequest }, { claimTunnel }, { claimTeeBundle }, proto] = await Promise.all([
+ 	import('#src/utils/logger.ts'),
+ 	import('#src/client/utils/client-socket.ts'),
+@@ -114,9 +99,11 @@ for(const level of ['info', 'debug'] as const) {
+ 			const tunnelError = await rpc('createTunnel', { id: 7, host: canaries.host, port: 443 })
+ 			assert.equal(tunnelError.code, 'ERROR_BAD_REQUEST')
+ 
+-			const request = proto.ClaimTunnelRequest.create({ request: { id: 1, host: 'example.com', port: 443 }, data: { timestampS: claimInfo.timestampS } })
++			const request = proto.ClaimTunnelRequest.create({ request: { id: 1, host: 'example.com', port: 443 }, data: { timestampS: claimInfo.timestampS, context: inputContext() } })
+ 			const handlerLogger = logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID), operationRef: loggerModule.createServerLogRef(randomUUID), handler: 'claimTunnel', userId: canaries.auth, requestId: canaries.requestId })
+ 			const handlerClient = {
++				authIdentity: TEST_SESSION_ID,
++				authHostWhitelist: Object.freeze(['example.com']),
+ 				metadata: { signatureType: proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 				assertAuthActive() {},
+ 				getTunnel() { return { createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '' }, transcript: [], async close() {} } },
+@@ -138,11 +125,7 @@ for(const level of ['info', 'debug'] as const) {
+ 			const teeLogger = logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID), operationRef: loggerModule.createServerLogRef(randomUUID), handler: 'claimTeeBundle' })
+ 			const teeContext = { logger: teeLogger, client: handlerClient } as any
+ 			const teeRequest = proto.ClaimTeeBundleRequest.create({ verificationBundle: new Uint8Array(), data: { ...claimInfo } })
+-			const successTee = await claimTeeBundle(teeRequest, teeContext)
+-			assert.ok(successTee.signatures?.claimSignature.length)
+-			failTee = true
+-			await assert.rejects(claimTeeBundle(teeRequest, teeContext), err => err === nestedError)
+-			failTee = false
++			await assert.rejects(claimTeeBundle(teeRequest, teeContext), /verified endpoint binding/)
+ 
+ 			logger.child({ userId: canaries.auth, hostname: canaries.host, requestId: canaries.requestId }).error({
+ 				err: nestedError, headers: { cookie: canaries.headers }, privateKey: canaries.key,
+@@ -154,7 +137,7 @@ for(const level of ['info', 'debug'] as const) {
+ 			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'failure' && item.errorCode === 'ERROR_AUTHENTICATION_FAILED'))
+ 			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'expired'))
+ 			assert.ok(records.some(item => item.stage === 'tunnel' && item.outcome === 'failure'))
+-			for(const stage of ['claimTunnel', 'claimTeeBundle']) {
++			for(const stage of ['claimTunnel']) {
+ 				assert.ok(records.some(item => item.stage === stage && item.outcome === 'success'))
+ 				assert.ok(records.some(item => item.stage === stage && item.outcome === 'failure'))
+ 			}
+@@ -164,7 +147,6 @@ for(const level of ['info', 'debug'] as const) {
+ 			assert.ok(records.some(item => item.connectionRef && item.operationRef))
+ 		} finally {
+ 			failTunnel = false
+-			failTee = false
+ 			await client?.terminateConnection()
+ 			await new Promise<void>(resolve => server.close(() => resolve()))
+ 			delete process.env.AUTHENTICATION_PUBLIC_KEY
+diff --git a/src/tests/sandbox-context.test.ts b/src/tests/sandbox-context.test.ts
+new file mode 100644
+index 0000000..dc8dcb9
+--- /dev/null
++++ b/src/tests/sandbox-context.test.ts
+@@ -0,0 +1,47 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { it } from 'node:test'
++
++import { assertSupportedInputContext, assertSupportedSignedContext, isSandboxContextMessage } from '#src/server/utils/claim-context-policy.ts'
++import { TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++
++// Byte-equal to @umia/types proof-context.sandbox-vectors.json; a repo test enforces it.
++const vectors = JSON.parse(
++	readFileSync(new URL('./fixtures/sandbox-context-vectors.json', import.meta.url), 'utf8')
++) as { chainId: number, contextAddress: string, accepted: string[], rejected: string[] }
++
++function input(contextMessage: string, contextAddress = vectors.contextAddress) {
++	return JSON.stringify({ contextAddress, contextMessage, reclaimSessionId: TEST_SESSION_ID })
++}
++
++it('recognises exactly the shared sandbox context vectors', () => {
++	assert.equal(vectors.chainId, 10143)
++	for(const message of vectors.accepted) {
++		assert.equal(isSandboxContextMessage(message, vectors.contextAddress), true, message)
++	}
++	for(const message of vectors.rejected) {
++		assert.equal(isSandboxContextMessage(message, vectors.contextAddress), false, message)
++	}
++})
++
++it('admits a sandbox context bound to its wallet and session through both checks', () => {
++	const message = vectors.accepted[0]
++	const accepted = assertSupportedInputContext(input(message), TEST_SESSION_ID)
++	assertSupportedSignedContext(JSON.stringify({
++		contextAddress: vectors.contextAddress, contextMessage: message,
++		extractedParameters: { handle: 'synthetic' },
++		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
++	}), accepted)
++})
++
++it('rejects a sandbox context for another wallet, another session, or free text', () => {
++	const other = '0x00000000000000000000000000000000000000a2'
++	for(const [raw, session] of [
++		[input(vectors.accepted[0], other), TEST_SESSION_ID],
++		[input(vectors.accepted[0]), 'different-session'],
++		[input('Auction verification'), TEST_SESSION_ID],
++		[input('test-only sandbox run:alpha'), TEST_SESSION_ID],
++	]) {
++		assert.throws(() => assertSupportedInputContext(raw, session), /Unsupported claim context/)
++	}
++})
+diff --git a/src/tests/utils/claim-context.ts b/src/tests/utils/claim-context.ts
+new file mode 100644
+index 0000000..6a46264
+--- /dev/null
++++ b/src/tests/utils/claim-context.ts
+@@ -0,0 +1,23 @@
++export const TEST_SESSION_ID = 'bound-session-id'
++export const TEST_CONTEXT_ADDRESS = '0x3333333333333333333333333333333333333333'
++export const TEST_AUCTION_ADDRESS = '0x4444444444444444444444444444444444444444'
++export const TEST_CONTEXT_MESSAGE = `register:10143:${TEST_AUCTION_ADDRESS}:nonce`
++export const TEST_PROVIDER_HASH = `0x${'a'.repeat(64)}`
++
++export function inputContext(sessionId = TEST_SESSION_ID) {
++	return JSON.stringify({
++		contextAddress: TEST_CONTEXT_ADDRESS,
++		contextMessage: TEST_CONTEXT_MESSAGE,
++		reclaimSessionId: sessionId
++	})
++}
++
++export function signedContext(account = 'synthetic-commitment', sessionId = TEST_SESSION_ID) {
++	return JSON.stringify({
++		contextAddress: TEST_CONTEXT_ADDRESS,
++		contextMessage: TEST_CONTEXT_MESSAGE,
++		extractedParameters: { account },
++		providerHash: TEST_PROVIDER_HASH,
++		reclaimSessionId: sessionId
++	})
++}

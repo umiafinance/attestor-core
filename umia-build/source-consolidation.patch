@@ -1,0 +1,301 @@
+diff --git a/src/server/handlers/createTunnel.ts b/src/server/handlers/createTunnel.ts
+index 8c56e44..633ca1e 100644
+--- a/src/server/handlers/createTunnel.ts
++++ b/src/server/handlers/createTunnel.ts
+@@ -38,9 +38,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 					return
+ 				}
+ 
+-				try {
+-					client.assertAuthActive()
+-				} catch {
++				if(!client.isAuthActive()) {
+ 					return
+ 				}
+ 
+@@ -65,9 +63,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 				if(!client.isOpen) {
+ 					return
+ 				}
+-				try {
+-					client.assertAuthActive()
+-				} catch {
++				if(!client.isAuthActive()) {
+ 					return
+ 				}
+ 
+diff --git a/src/server/socket.ts b/src/server/socket.ts
+index ecd2f2d..a88f471 100644
+--- a/src/server/socket.ts
++++ b/src/server/socket.ts
+@@ -101,6 +101,10 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 		this.authSession?.assertActive()
+ 	}
+ 
++	isAuthActive() {
++		return this.connectionState === 'open' && (this.authSession?.isActive() ?? false)
++	}
++
+ 	protected override assertCanProcessMessage() {
+ 		this.assertAuthActive()
+ 	}
+@@ -211,9 +215,6 @@ async function handleRpcRequest(
+ 		tx?.setOutcome('success')
+ 	} catch(err) {
+ 		logger.error({ err, durationMs: Date.now() - startedAt }, 'error in RPC request')
+-		if(type === 'createTunnel') logger.error({ err }, 'tunnel request failed')
+-		if(type === 'claimTunnel') logger.error({ err }, 'claim tunnel failed')
+-		if(type === 'claimTeeBundle') logger.error({ err }, 'claim handler failed')
+ 		try {
+ 			await respond(AttestorError.fromError(err))
+ 		} catch(sendErr) {
+diff --git a/src/server/utils/auth-session.ts b/src/server/utils/auth-session.ts
+index c1156e3..72f8884 100644
+--- a/src/server/utils/auth-session.ts
++++ b/src/server/utils/auth-session.ts
+@@ -42,12 +42,22 @@ export class AuthSession {
+ 	}
+ 
+ 	assertActive() {
+-		if(this.clock.nowMs() >= this.deadlineMs) {
+-			this.expire()
++		if(!this.isActive()) {
+ 			throw authExpiredError()
+ 		}
+ 	}
+ 
++	isActive() {
++		if(this.disposed) {
++			return false
++		}
++		if(this.clock.nowMs() < this.deadlineMs) {
++			return true
++		}
++		this.expire()
++		return false
++	}
++
+ 	dispose() {
+ 		if(this.disposed) return
+ 		this.disposed = true
+diff --git a/src/tests/auth-lifetime.test.ts b/src/tests/auth-lifetime.test.ts
+index bc3d988..3a40d08 100644
+--- a/src/tests/auth-lifetime.test.ts
++++ b/src/tests/auth-lifetime.test.ts
+@@ -4,7 +4,7 @@ import { Wallet } from 'ethers'
+ 
+ import { AuthSession, type AuthClock } from '#src/server/utils/auth-session.ts'
+ import { assertValidAuthRequest, createAuthRequest } from '#src/utils/auth.ts'
+-import { SelectedServiceSignatureType } from '#src/utils/signatures/index.ts'
++import { SelectedServiceSignature, SelectedServiceSignatureType } from '#src/utils/signatures/index.ts'
+ import { AttestorError } from '#src/utils/error.ts'
+ 
+ class FakeClock implements AuthClock {
+@@ -104,4 +104,29 @@ describe('auth deadline', () => {
+ 			delete process.env.AUTHENTICATION_PUBLIC_KEY
+ 		}
+ 	})
++
++	it('rejects a valid signature when verification crosses the expiry boundary', async() => {
++		const key = Wallet.createRandom()
++		process.env.AUTHENTICATION_PUBLIC_KEY = key.publicKey
++		let now = 100_000
++		const dateMock = mock.method(Date, 'now', () => now * 1000)
++		const auth = await createAuthRequest({ expiresAt: now + 1 }, key.privateKey)
++		const originalVerify = SelectedServiceSignature.verify.bind(SelectedServiceSignature)
++		let release!: () => void
++		const gate = new Promise<void>(resolve => { release = resolve })
++		const verifyMock = mock.method(SelectedServiceSignature, 'verify', async(...args) => {
++			await gate
++			return originalVerify(...args)
++		})
++		try {
++			const pending = assertValidAuthRequest(auth, SelectedServiceSignatureType)
++			now++
++			release()
++			await assert.rejects(pending, isAuthError)
++		} finally {
++			verifyMock.mock.restore()
++			dateMock.mock.restore()
++			delete process.env.AUTHENTICATION_PUBLIC_KEY
++		}
++	})
+ })
+diff --git a/src/tests/auth-tunnel-forwarding.test.ts b/src/tests/auth-tunnel-forwarding.test.ts
+index 91fbe6f..c1feec1 100644
+--- a/src/tests/auth-tunnel-forwarding.test.ts
++++ b/src/tests/auth-tunnel-forwarding.test.ts
+@@ -35,6 +35,7 @@ it('allows a tunnel packet before expiry and blocks TCP-to-WS forwarding after e
+ 		assertAuthActive() {
+ 			if(!active) throw new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Authentication expired')
+ 		},
++		isAuthActive() { return active },
+ 		async sendMessage(message: unknown) { sent.push(message) }
+ 	}
+ 	await createTunnel(CreateTunnelRequest.create({ id: 7, host: 'example.com', port: 443 }),
+diff --git a/src/tests/log-privacy.test.ts b/src/tests/log-privacy.test.ts
+index 90a0349..755b543 100644
+--- a/src/tests/log-privacy.test.ts
++++ b/src/tests/log-privacy.test.ts
+@@ -96,8 +96,23 @@ for(const level of ['info', 'debug'] as const) {
+ 			const socket = (ws as any).serverSocket
+ 			const rpc = (type: string, data: unknown) => new Promise<any>(resolve =>
+ 				socket.dispatchRPCEvent('rpc-request', { type, data, requestId: canaries.requestId, respond: resolve }))
++			const beforeTunnelFailure = lines.length
+ 			const tunnelError = await rpc('createTunnel', { id: 7, host: canaries.host, port: 443 })
+ 			assert.equal(tunnelError.code, 'ERROR_BAD_REQUEST')
++			const tunnelFailures = assertPrivateLogs(lines.slice(beforeTunnelFailure)).filter(item => item.outcome === 'failure')
++			assert.equal(tunnelFailures.length, 1, 'createTunnel emitted duplicate failure records')
++			assert.ok(tunnelFailures[0].connectionRef && tunnelFailures[0].operationRef, JSON.stringify(tunnelFailures[0]))
++			for(const [type, data] of [
++				['claimTunnel', {}],
++				['claimTeeBundle', {}]
++			] as const) {
++				const before = lines.length
++				await rpc(type, data)
++				const failures = assertPrivateLogs(lines.slice(before)).filter(item => item.outcome === 'failure')
++				assert.equal(failures.length, 1, `${type} emitted duplicate failure records`)
++				assert.equal(failures[0].stage, 'rpc')
++				assert.ok(failures[0].connectionRef && failures[0].operationRef)
++			}
+ 
+ 			const request = proto.ClaimTunnelRequest.create({ request: { id: 1, host: 'example.com', port: 443 }, data: { timestampS: claimInfo.timestampS, context: inputContext() } })
+ 			const handlerLogger = logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID), operationRef: loggerModule.createServerLogRef(randomUUID), handler: 'claimTunnel', userId: canaries.auth, requestId: canaries.requestId })
+@@ -136,7 +151,7 @@ for(const level of ['info', 'debug'] as const) {
+ 			const records = assertPrivateLogs(lines)
+ 			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'failure' && item.errorCode === 'ERROR_AUTHENTICATION_FAILED'))
+ 			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'expired'))
+-			assert.ok(records.some(item => item.stage === 'tunnel' && item.outcome === 'failure'))
++			assert.ok(records.some(item => item.stage === 'rpc' && item.outcome === 'failure' && item.errorCode === 'ERROR_BAD_REQUEST'))
+ 			for(const stage of ['claimTunnel']) {
+ 				assert.ok(records.some(item => item.stage === stage && item.outcome === 'success'))
+ 				assert.ok(records.some(item => item.stage === stage && item.outcome === 'failure'))
+diff --git a/src/types/client.ts b/src/types/client.ts
+index 1b4bbde..9863acb 100644
+--- a/src/types/client.ts
++++ b/src/types/client.ts
+@@ -155,6 +155,7 @@ export declare class IAttestorServerSocket extends IAttestorSocket {
+ 
+ 	setAuthSession(data: AuthenticatedUserData): void
+ 	assertAuthActive(): void
++	isAuthActive(): boolean
+ 	readonly authHostWhitelist: readonly string[] | undefined
+ 	readonly authIdentity: string | undefined
+ 
+diff --git a/src/utils/auth.ts b/src/utils/auth.ts
+index 5f20135..a5c65c0 100644
+--- a/src/utils/auth.ts
++++ b/src/utils/auth.ts
+@@ -42,12 +42,7 @@ export async function assertValidAuthRequest(
+ 		)
+ 	}
+ 
+-	if(!Number.isSafeInteger(data.expiresAt) || data.expiresAt <= unixTimestampSeconds()) {
+-		throw new AttestorError(
+-			'ERROR_AUTHENTICATION_FAILED',
+-			'Authentication request has expired'
+-		)
+-	}
++	assertAuthNotExpired(data)
+ 
+ 	const proto = AuthenticatedUserData.encode(data).finish()
+ 	const signatureAlg = SIGNATURES[signatureType]
+@@ -56,16 +51,20 @@ export async function assertValidAuthRequest(
+ 	)
+ 	const verified = await signatureAlg
+ 		.verify(proto, signature, address)
+-	if(data.expiresAt <= unixTimestampSeconds()) {
++	assertAuthNotExpired(data)
++	if(!verified) {
+ 		throw new AttestorError(
+ 			'ERROR_AUTHENTICATION_FAILED',
+-			'Authentication request has expired'
++			'Signature verification failed'
+ 		)
+ 	}
+-	if(!verified) {
++}
++
++function assertAuthNotExpired(data: AuthenticatedUserData) {
++	if(!Number.isSafeInteger(data.expiresAt) || data.expiresAt <= unixTimestampSeconds()) {
+ 		throw new AttestorError(
+ 			'ERROR_AUTHENTICATION_FAILED',
+-			'Signature verification failed'
++			'Authentication request has expired'
+ 		)
+ 	}
+ }
+diff --git a/src/utils/logger.ts b/src/utils/logger.ts
+index 66bdba2..d76df44 100644
+--- a/src/utils/logger.ts
++++ b/src/utils/logger.ts
+@@ -25,15 +25,12 @@ const EVENTS: Record<string, { stage: Stage, outcome: Outcome, errorCode?: SafeE
+ 	'failed to deliver RPC error response': { stage: 'rpc', outcome: 'failure' },
+ 	'error processing message': { stage: 'rpc', outcome: 'failure' },
+ 	'error writing to tunnel': { stage: 'tunnel', outcome: 'failure' },
+-	'tunnel request failed': { stage: 'tunnel', outcome: 'failure' },
+ 	'failed to forward tunnel message': { stage: 'tunnel', outcome: 'failure' },
+ 	'failed to send tunnel disconnect event': { stage: 'tunnel', outcome: 'failure' },
+ 	'error closing tunnel': { stage: 'tunnel', outcome: 'failure' },
+ 	'invalid claim request': { stage: 'claimTunnel', outcome: 'failure' },
+ 	'claim tunnel rejected': { stage: 'claimTunnel', outcome: 'failure' },
+ 	'claim tunnel completed': { stage: 'claimTunnel', outcome: 'success' },
+-	'claim tunnel failed': { stage: 'claimTunnel', outcome: 'failure' },
+-	'claim handler failed': { stage: 'claimTeeBundle', outcome: 'failure' },
+ 	'Starting TEE bundle verification': { stage: 'claimTeeBundle', outcome: 'started' },
+ 	'TEE bundle claim validation successful': { stage: 'claimTeeBundle', outcome: 'success' },
+ 	'TEE bundle claim processing completed': { stage: 'claimTeeBundle', outcome: 'success' },
+@@ -136,15 +133,41 @@ export function makeLogger(
+ 	}
+ }
+ 
+-function hardenChildren(target: PinoLogger, inherited: Record<string, unknown> = {}): PinoLogger {
+-	const createChild = target.child.bind(target)
++function hardenChildren(
++	target: PinoLogger,
++	inherited: Record<string, unknown> = {},
++	createChild: PinoLogger['child'] = target.child
++): PinoLogger {
+ 	target.child = ((bindings: Bindings, options?: ChildLoggerOptions) => {
+-		const safe = { ...inherited, ...projectContext(bindings) }
+-		return hardenChildren(createChild(projectContext(bindings), options), safe)
++		const safe = { ...inherited, ...safeChildBindings(bindings) }
++		return hardenChildren(createChild.call(target, projectContext(safeChildBindings(bindings)), options), safe, createChild)
+ 	}) as PinoLogger['child']
+ 	return target
+ }
+ 
++function safeChildBindings(input: unknown): Record<string, unknown> {
++	if(!input || typeof input !== 'object') {
++		return {}
++	}
++	try {
++		const value = input as Record<string, unknown>
++		const safe: Record<string, unknown> = {}
++		if(typeof value.handler === 'string' && HANDLERS.includes(value.handler as Handler)) {
++			safe.handler = value.handler
++		}
++		// Keep branded refs opaque until Pino's binding formatter projects them.
++		if(value.connectionRef && typeof value.connectionRef === 'object' && serverRefs.has(value.connectionRef)) {
++			safe.connectionRef = value.connectionRef
++		}
++		if(value.operationRef && typeof value.operationRef === 'object' && serverRefs.has(value.operationRef)) {
++			safe.operationRef = value.operationRef
++		}
++		return safe
++	} catch {
++		return {}
++	}
++}
++
+ function projectContext(input: unknown): Record<string, unknown> {
+ 	if(!input || typeof input !== 'object') return {}
+ 	try {
+@@ -159,6 +182,7 @@ function projectContext(input: unknown): Record<string, unknown> {
+ 	}
+ }
+ 
++
+ function projectEvidence(input: unknown): SafeEvidence {
+ 	if(input instanceof Error) return { errorCode: safeErrorCode(input) }
+ 	if(!input || typeof input !== 'object') return {}

@@ -1,0 +1,303 @@
+import type { IncomingHttpHeaders } from 'http'
+import { HttpsProxyAgent } from 'https-proxy-agent'
+import { Socket } from 'net'
+
+import { CONNECTION_TIMEOUT_MS } from '#src/config/index.ts'
+import type { CreateTunnelRequest } from '#src/proto/api.ts'
+import { getPublicAddresses } from '#src/server/utils/generics.ts'
+import { isValidCountryCode } from '#src/server/utils/iso.ts'
+import { isValidProxySessionId } from '#src/server/utils/proxy-session.ts'
+import type { Logger } from '#src/types/index.ts'
+import type { MakeTunnelFn, TCPSocketProperties } from '#src/types/index.ts'
+import { getEnvVariable } from '#src/utils/env.ts'
+import { AttestorError } from '#src/utils/index.ts'
+import { rejection } from '#src/utils/rejection-reason.ts'
+
+const HTTPS_PROXY_URL = getEnvVariable('HTTPS_PROXY_URL')
+// allow these hosts to be directed w/o any IP resolution checks,
+// useful for testing. Use with caution in production.
+const ALLOWED_DIRECT_HOSTS = getEnvVariable('ALLOWED_DIRECT_HOSTS')
+	?.split(',')
+
+type ExtraOpts = Omit<CreateTunnelRequest, 'id' | 'initialMessage'> & {
+	logger: Logger
+}
+
+interface ConnectResponse {
+	statusCode: number
+	statusText: string
+	headers: IncomingHttpHeaders
+}
+
+/**
+ * Builds a TCP tunnel to the given host and port.
+ * If a geolocation is provided -- an HTTPS proxy is used
+ * to connect to the host.
+ * If a proxySessionId is provided -- a static ip is used with HTTPS proxy
+ * across multiple requests with this same proxySessionId.
+ *
+ * HTTPS proxy essentially creates an opaque tunnel to the
+ * host using the CONNECT method. Any data can be sent through
+ * this tunnel to the end host.
+ * https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/CONNECT
+ *
+ * The tunnel also retains a transcript of all messages sent and received.
+ */
+export const makeTcpTunnel: MakeTunnelFn<ExtraOpts, TCPSocketProperties> = async({
+	onClose,
+	onMessage,
+	logger,
+	...opts
+}) => {
+	const transcript: TCPSocketProperties['transcript'] = []
+	const socket = await connectTcp({ ...opts, logger })
+
+	let closed = false
+
+	socket.on('data', message => {
+		if(closed) {
+			logger.warn('socket is closed, dropping message')
+			return
+		}
+
+		onMessage?.(message)
+		transcript.push({ sender: 'server', message })
+	})
+
+	// socket.once('error', onSocketClose)
+	socket.once('close', () => onSocketClose(undefined))
+
+	return {
+		socket,
+		transcript,
+		createRequest: opts,
+		async write(data) {
+			transcript.push({ sender: 'client', message: data })
+			await new Promise<void>((resolve, reject) => {
+				socket.write(data, err => {
+					if(err) {
+						reject(err)
+					} else {
+						resolve()
+					}
+				})
+			})
+		},
+		close(err?: Error) {
+			if(closed) {
+				return
+			}
+
+			socket.destroy(err)
+		}
+	}
+
+	function onSocketClose(err?: Error) {
+		if(closed) {
+			return
+		}
+
+		logger.debug({ err }, 'closing socket')
+
+		closed = true
+
+		onClose?.(err)
+		onClose = undefined
+	}
+}
+
+async function connectTcp({ host, port, geoLocation, proxySessionId, logger }: ExtraOpts) {
+	let connectTimeout: NodeJS.Timeout | undefined
+	let socket: Socket | undefined
+	try {
+		await new Promise(async(resolve, reject) => {
+			try {
+				// add a timeout to ensure the connection doesn't hang
+				// and cause our gateway to send out a 504
+				connectTimeout = setTimeout(
+					() => reject(
+						new AttestorError(
+							'ERROR_NETWORK_ERROR',
+							'Server connection timed out'
+						)
+					),
+					CONNECTION_TIMEOUT_MS
+				)
+				socket = await getSocket({
+					host,
+					port,
+					geoLocation,
+					proxySessionId,
+					logger
+				})
+				socket.once('connect', resolve)
+				socket.once('error', reject)
+				socket.once('end', () => (
+					reject(
+						new AttestorError(
+							'ERROR_NETWORK_ERROR',
+							'connection closed'
+						)
+					)
+				))
+			} catch(err) {
+				reject(err)
+			}
+		})
+
+		logger.debug({ addr: `${host}:${port}` }, 'connected')
+
+		return socket!
+	} catch(err) {
+		socket?.end()
+		throw err
+	} finally {
+		clearTimeout(connectTimeout)
+	}
+}
+
+async function getSocket(opts: ExtraOpts) {
+	const { logger, geoLocation } = opts
+	if((geoLocation || opts.proxySessionId) && !HTTPS_PROXY_URL) {
+		throw rejection('ERROR_BAD_REQUEST', 'PROXY_NOT_CONFIGURED', 'Geolocation or proxy session requires HTTPS_PROXY_URL')
+	}
+	if(geoLocation) {
+		try {
+			return await _getSocket(opts)
+		} catch(err) {
+			// see if the proxy is blocking the connection
+			// due to their own arbitrary rules,
+			// if so -- we resolve hostname first &
+			// connect directly via address to
+			// avoid proxy knowing which host we're connecting to
+			if(
+				!(err instanceof AttestorError)
+				|| err.data?.code !== 403
+			) {
+				throw err
+			}
+
+			const addrs = await getPublicAddresses(opts.host)
+			logger.info(
+				{ addrs, host: opts.host },
+				'failed to connect due to restricted IP, trying via raw addr'
+			)
+
+			for(const addr of addrs) {
+				try {
+					return await _getSocket({ ...opts, host: addr })
+				} catch(err) {
+					logger.error(
+						{ addr, err },
+						'failed to connect to host'
+					)
+				}
+			}
+
+			throw err
+		}
+	}
+
+	const addrs = ALLOWED_DIRECT_HOSTS?.includes(opts.host)
+		? [opts.host]
+		: await getPublicAddresses(opts.host)
+	logger.debug(
+		{ addrs, host: opts.host },
+		'got public addresses for connection attempt'
+	)
+	for(const [i, addr] of addrs.entries()) {
+		try {
+			return await _getSocket({ ...opts, host: addr })
+		} catch (err) {
+			logger.error(
+				{ addr, err },
+				`failed to connect to address ${i + 1} of ${addrs.length}`
+			)
+			if(i === addrs.length - 1) {
+				throw err
+			}
+		}
+	}
+
+	throw new AttestorError(
+		'ERROR_NETWORK_ERROR',
+		`Failed to connect to host ${opts.host} at any resolved address`
+	)
+}
+
+async function _getSocket(
+	{
+		host,
+		port,
+		geoLocation,
+		proxySessionId,
+		logger
+	}: ExtraOpts,
+) {
+	const socket = new Socket()
+
+	if(!geoLocation && !proxySessionId) {
+		socket.connect({ host, port, })
+		return socket
+	}
+
+	if(!isValidCountryCode(geoLocation)) {
+		throw AttestorError.badRequest(
+			`Geolocation "${geoLocation}" is invalid. Must be 2 letter ISO country code`,
+			{ geoLocation }
+		)
+	}
+
+	if(proxySessionId && !isValidProxySessionId(proxySessionId)) {
+		throw AttestorError.badRequest(
+			`proxySessionId "${proxySessionId}" is invalid. Must be a lowercase alphanumeric string of length 8-14 characters. eg. "mystring12345", "something1234".`,
+			{ proxySessionId }
+		)
+	}
+
+	const agentUrl = HTTPS_PROXY_URL!.replace(
+		'{{geoLocation}}',
+		geoLocation?.toLowerCase() || ''
+	).replace(
+		'{{proxySessionId}}',
+		proxySessionId ? `-session-${proxySessionId}` : ''
+	)
+
+	const agent = new HttpsProxyAgent(agentUrl)
+	const waitForProxyRes = new Promise<ConnectResponse>(resolve => {
+		// @ts-ignore
+		socket.once('proxyConnect', resolve)
+	})
+
+	const proxySocket = await agent.connect(
+		// ignore, because https-proxy-agent
+		// expects an http request object
+		// @ts-ignore
+		socket,
+		{ host, port, timeout: CONNECTION_TIMEOUT_MS }
+	)
+
+	const res = await waitForProxyRes
+	if(res.statusCode !== 200) {
+		logger.error(
+			{ geoLocation, proxySessionId, res },
+			'Proxy geo location or session id failed'
+		)
+		throw new AttestorError(
+			'ERROR_PROXY_ERROR',
+			`Proxy via ${geoLocation ? `geo location "${geoLocation}"` : ''}${geoLocation && proxySessionId ? ', or ' : ''}${proxySessionId ? `session id "${proxySessionId}"` : ''} failed with status code: ${res.statusCode}, message: ${res.statusText}`,
+			{
+				code: res.statusCode,
+				message: res.statusText,
+			}
+		)
+	}
+
+	process.nextTick(() => {
+		// ensure connect event is emitted
+		// so it can be captured by the caller
+		proxySocket.emit('connect')
+	})
+
+	return proxySocket
+}

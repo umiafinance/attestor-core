@@ -1,0 +1,644 @@
+import '#src/server/utils/config-env.ts'
+
+import assert from 'node:assert'
+import { describe, it } from 'node:test'
+
+import type { CipherSuite } from '@reclaimprotocol/tls'
+import { crypto, encryptWrappedRecord, SUPPORTED_CIPHER_SUITE_MAP } from '@reclaimprotocol/tls'
+import type { ZKEngine } from '@reclaimprotocol/zk-symmetric-crypto'
+
+import { TOPRF_DOMAIN_SEPARATOR } from '#src/config/index.ts'
+import type { MessageReveal_ZKProof as ZKProof } from '#src/proto/api.ts'
+import { ZKProofEngine } from '#src/proto/api.ts'
+import { toprf } from '#src/server/handlers/toprf.ts'
+import type {
+	CompleteTLSPacket,
+	MessageRevealInfo,
+	RedactedOrHashedArraySlice,
+	TOPRFProofParams
+} from '#src/types/index.ts'
+import {
+	getBlocksToReveal,
+	isTls13Suite,
+	logger,
+	makeDefaultOPRFOperator,
+	makeZkProofGenerator,
+	preparePacketsForReveal,
+	redactSlices,
+	strToUint8Array,
+	uint8ArrayToStr,
+	verifyZkPacket
+} from '#src/utils/index.ts'
+
+const ZK_CIPHER_SUITES: CipherSuite[] = [
+	'TLS_CHACHA20_POLY1305_SHA256',
+	'TLS_AES_128_GCM_SHA256',
+	'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
+]
+
+const ZK_ENGINES: ZKEngine[] = [
+	'stwo',
+	'gnark',
+	'snarkjs'
+]
+
+type RedactionTestVector = {
+	input: string[]
+	output: string[]
+	redactions: RedactedOrHashedArraySlice[]
+}
+
+describe('Redaction Tests', () => {
+
+	it('should correctly redact blocks', async() => {
+		const vectors: RedactionTestVector[] = [
+			{
+				input: [
+					'hell',
+					'o world'
+				],
+				output: [
+					'h***',
+					'* world'
+				],
+				redactions: [
+					{ fromIndex: 1, toIndex: 5 }
+				]
+			},
+			{
+				input: [
+					'hell',
+					'o world'
+				],
+				output: [
+					// first block is completely
+					// redacted, so it won't be included
+					'* world'
+				],
+				redactions: [
+					{ fromIndex: 0, toIndex: 5 }
+				]
+			},
+			{
+				input: [
+					'hello',
+					'how',
+					'do',
+					'you',
+					'do'
+				],
+				output: [
+					'he**o',
+					'd*',
+					'y*u',
+					'do'
+				],
+				redactions: [
+					{ fromIndex: 2, toIndex: 4 },
+					{ fromIndex: 5, toIndex: 8 },
+					{ fromIndex: 9, toIndex: 10 },
+					{ fromIndex: 11, toIndex: 12 }
+				]
+			}
+		]
+
+		for(const { input, output, redactions } of vectors) {
+			const realOutput = await getBlocksToReveal(
+				input.map(i => ({ plaintext: Buffer.from(i) })),
+				() => redactions,
+				() => {
+					throw new Error('should not call this')
+				}
+			)
+			assert(realOutput !== 'all', 'should not return "all"')
+
+			assert.equal(realOutput.length, output.length)
+			for(const [i, element] of output.entries()) {
+				assert.equal(
+					uint8ArrayToStr(realOutput[i].redactedPlaintext),
+					element
+				)
+			}
+		}
+	})
+
+	it('should correctly hash blocks', async() => {
+		const nullifer = strToUint8Array('abcdefg')
+		const base64Nullifier = Buffer.from(nullifer).toString('base64')
+		const vectors: RedactionTestVector[] = [
+			{
+				input: [
+					'hell',
+					'o world'
+				],
+				output: [
+					'h' + base64Nullifier.slice(0, 3),
+					base64Nullifier.slice(3, 4) + ' world'
+				],
+				redactions: [
+					{ fromIndex: 1, toIndex: 5, hash: 'oprf' }
+				]
+			},
+			{
+				input: [
+					'hell',
+					'o world'
+				],
+				output: [
+					base64Nullifier.slice(0, 4),
+					base64Nullifier.slice(4, 5) + ' world'
+				],
+				redactions: [
+					{ fromIndex: 0, toIndex: 5, hash: 'oprf' }
+				]
+			},
+		]
+
+		for(const { input, output, redactions } of vectors) {
+			const realOutput = await getBlocksToReveal(
+				input.map(i => ({ plaintext: Buffer.from(i) })),
+				() => redactions,
+				async() => ({
+					dataLocation: undefined,
+					nullifier: nullifer,
+					responses: [],
+					mask: strToUint8Array('mask'),
+					plaintext: strToUint8Array('abcdefg')
+				})
+			)
+			assert(realOutput !== 'all', 'should not return "all"')
+
+			assert.equal(realOutput.length, output.length)
+			for(const [i, element] of output.entries()) {
+				assert.equal(
+					uint8ArrayToStr(realOutput[i].redactedPlaintext),
+					element
+				)
+			}
+		}
+	})
+
+	it('should correctly handle oprf-raw markers (no redaction, no OPRF call)', async() => {
+		// oprf-raw: data is revealed (not redacted), OPRF computed server-side
+		const input = ['secret: abc123', ' end']
+		const redactions: RedactedOrHashedArraySlice[] = [
+			{ fromIndex: 8, toIndex: 14, hash: 'oprf-raw' } // 'abc123'
+		]
+
+		const realOutput = await getBlocksToReveal(
+			input.map(i => ({ plaintext: Buffer.from(i) })),
+			() => redactions,
+			async() => {
+				throw new Error('should not call performOprf for oprf-raw')
+			}
+		)
+
+		assert(realOutput !== 'all', 'should not return "all"')
+		// For oprf-raw: plaintext is NOT redacted
+		assert.equal(uint8ArrayToStr(realOutput[0].redactedPlaintext), 'secret: abc123')
+		assert.equal(uint8ArrayToStr(realOutput[1].redactedPlaintext), ' end')
+
+		// Check oprfRawMarkers are set
+		assert.ok(realOutput[0].oprfRawMarkers, 'oprfRawMarkers should be set')
+		assert.equal(realOutput[0].oprfRawMarkers.length, 1)
+		assert.deepEqual(realOutput[0].oprfRawMarkers[0].dataLocation, {
+			fromIndex: 8,
+			length: 6
+		})
+	})
+
+	it('should handle mixed oprf-raw and regular redactions', async() => {
+		const input = ['email: test@example.com, token: secret123']
+		const redactions: RedactedOrHashedArraySlice[] = [
+			{ fromIndex: 7, toIndex: 23 }, // 'test@example.com' - redacted
+			{ fromIndex: 31, toIndex: 40, hash: 'oprf-raw' } // 'secret123' - oprf-raw
+		]
+
+		const realOutput = await getBlocksToReveal(
+			input.map(i => ({ plaintext: Buffer.from(i) })),
+			() => redactions,
+			async() => {
+				throw new Error('should not call performOprf for oprf-raw or regular redaction')
+			}
+		)
+
+		assert(realOutput !== 'all')
+		// First part is redacted, oprf-raw part is revealed
+		const expectedRedacted = 'email: ****************, token: secret123'
+		assert.equal(uint8ArrayToStr(realOutput[0].redactedPlaintext), expectedRedacted)
+
+		// oprfRawMarkers should be set for the oprf-raw portion
+		assert.ok(realOutput[0].oprfRawMarkers)
+		assert.equal(realOutput[0].oprfRawMarkers.length, 1)
+		assert.deepEqual(realOutput[0].oprfRawMarkers[0].dataLocation, {
+			fromIndex: 31,
+			length: 9
+		})
+	})
+
+	it('should handle cross-block oprf-raw markers', async() => {
+		// oprf-raw data spanning multiple blocks
+		const input = ['token: abc', '123xyz end']
+		const redactions: RedactedOrHashedArraySlice[] = [
+			// 'abc123xyz' spans from block 0 (position 7) to block 1 (position 6)
+			{ fromIndex: 7, toIndex: 16, hash: 'oprf-raw' }
+		]
+
+		const realOutput = await getBlocksToReveal(
+			input.map(i => ({ plaintext: Buffer.from(i) })),
+			() => redactions,
+			async() => {
+				throw new Error('should not call performOprf for oprf-raw')
+			}
+		)
+
+		assert(realOutput !== 'all', 'should not return "all"')
+		assert.equal(realOutput.length, 2, 'should have 2 blocks')
+
+		// For oprf-raw: plaintext is NOT redacted (revealed to server)
+		assert.equal(uint8ArrayToStr(realOutput[0].redactedPlaintext), 'token: abc')
+		assert.equal(uint8ArrayToStr(realOutput[1].redactedPlaintext), '123xyz end')
+
+		// First block should have the marker with total length
+		assert.ok(realOutput[0].oprfRawMarkers, 'oprfRawMarkers should be set on first block')
+		assert.equal(realOutput[0].oprfRawMarkers.length, 1)
+		assert.deepEqual(realOutput[0].oprfRawMarkers[0].dataLocation, {
+			fromIndex: 7, // position in first block
+			length: 9 // total length across blocks: 'abc123xyz'
+		})
+
+		// Second block should have overshotOprfRawFromPrevBlock
+		assert.ok(
+			realOutput[1].overshotOprfRawFromPrevBlock,
+			'second block should have overshotOprfRawFromPrevBlock'
+		)
+		assert.equal(
+			realOutput[1].overshotOprfRawFromPrevBlock.length,
+			6, // '123xyz' = 6 bytes overshot into second block
+			'overshotOprfRawFromPrevBlock should be 6 bytes'
+		)
+	})
+})
+
+describe('OPRF-Raw Nullifier Consistency', () => {
+	// This test verifies that oprf-raw (server-side OPRF) produces
+	// the SAME nullifier as ZK OPRF (client masks, server evaluates, client finalizes)
+	// for identical input data
+	it('should produce same nullifier as ZK OPRF for same input', async() => {
+		const testData = strToUint8Array('test@example.com')
+
+		// 1. Compute via ZK OPRF flow (client masks → server evaluates → client finalizes)
+		const oprfOperator = makeDefaultOPRFOperator('chacha20', 'gnark', logger)
+		const reqData = await oprfOperator.generateOPRFRequestData(
+			testData,
+			TOPRF_DOMAIN_SEPARATOR,
+			logger
+		)
+		const serverResponse = await toprf(
+			{
+				maskedData: reqData.maskedData,
+				engine: ZKProofEngine.ZK_ENGINE_GNARK
+			},
+			{ logger } as any
+		)
+		const zkOprfNullifier = await oprfOperator.finaliseOPRF(
+			serverResponse.publicKeyShare,
+			reqData,
+			[serverResponse]
+		)
+
+		// 2. Compute via oprf-raw flow (server does everything)
+		// This simulates what computeOPRFRaw does
+		const oprfRawRequest = await oprfOperator.generateOPRFRequestData(
+			testData,
+			TOPRF_DOMAIN_SEPARATOR,
+			logger
+		)
+		const oprfRawResponse = await toprf(
+			{
+				maskedData: oprfRawRequest.maskedData,
+				engine: ZKProofEngine.ZK_ENGINE_GNARK
+			},
+			{ logger } as any
+		)
+		const oprfRawNullifier = await oprfOperator.finaliseOPRF(
+			oprfRawResponse.publicKeyShare,
+			oprfRawRequest,
+			[oprfRawResponse]
+		)
+
+		// 3. Both should produce the same nullifier
+		// (the mask cancels out in the final computation)
+		assert.deepEqual(
+			zkOprfNullifier,
+			oprfRawNullifier,
+			'ZK OPRF and oprf-raw should produce identical nullifiers for same input'
+		)
+
+		// Verify determinism - running again should give same result
+		const thirdRequest = await oprfOperator.generateOPRFRequestData(
+			testData,
+			TOPRF_DOMAIN_SEPARATOR,
+			logger
+		)
+		const thirdResponse = await toprf(
+			{
+				maskedData: thirdRequest.maskedData,
+				engine: ZKProofEngine.ZK_ENGINE_GNARK
+			},
+			{ logger } as any
+		)
+		const thirdNullifier = await oprfOperator.finaliseOPRF(
+			thirdResponse.publicKeyShare,
+			thirdRequest,
+			[thirdResponse]
+		)
+
+		assert.deepEqual(
+			zkOprfNullifier,
+			thirdNullifier,
+			'OPRF should be deterministic for same input'
+		)
+	})
+})
+
+describe('OPRF Slicing Tests', () => {
+
+	const cipherSuite: CipherSuite = 'TLS_CHACHA20_POLY1305_SHA256'
+	const alg = 'CHACHA20-POLY1305'
+	const zkEngine = 'gnark'
+	const keylength = 32
+
+	it('should correctly demarcate blocks for OPRF', async() => {
+		const plaintext = `lorem ipsum dolor sit amet, consectetur adipiscing elit,
+			sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+			Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris
+			nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+			cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat
+			cupidatat non proident, sunt in culpa qui officia deserunt mollit anim
+			id est laborum`
+		const vectors = [
+			{
+				plaintext: plaintext,
+				redactions: [
+					{ fromIndex: 0, toIndex: 35, hash: 'oprf' as const },
+				]
+			},
+			{
+				plaintext: plaintext,
+				redactions: [
+					{ fromIndex: 128, toIndex: 138, hash: 'oprf' as const },
+				]
+			},
+			{
+				plaintext: plaintext,
+				redactions: [
+					{ fromIndex: 125, toIndex: 135, hash: 'oprf' as const },
+				]
+			}
+		]
+
+		const key = Buffer.alloc(keylength, 0)
+		key[0] = 1
+		key[3] = 4
+		const {
+			ivLength: fixedIvLength,
+		} = SUPPORTED_CIPHER_SUITE_MAP[cipherSuite]
+		const fixedIv = Buffer.alloc(fixedIvLength, 0)
+		fixedIv[0] = 1
+		fixedIv[3] = 4
+
+		const encKey = await crypto.importKey(alg, key)
+
+		for(const [i, { plaintext, redactions }] of vectors.entries()) {
+			const plaintextArr = Buffer.from(plaintext)
+			const { ciphertext, iv } = await encryptWrappedRecord(
+				plaintextArr,
+				{
+					key: encKey,
+					iv: fixedIv,
+					recordNumber: 1234,
+					recordHeaderOpts: { type: 'WRAPPED_RECORD' },
+					cipherSuite,
+					version: isTls13Suite(cipherSuite) ? 'TLS1_3' : 'TLS1_2',
+				}
+			)
+
+			const packet: CompleteTLSPacket = {
+				type: 'ciphertext',
+				encKey,
+				iv,
+				recordNumber: 1234,
+				plaintext: plaintextArr,
+				ciphertext,
+				fixedIv: fixedIv,
+				data: ciphertext
+			}
+
+			const blocksToReveal
+				= await getBlocksToReveal([packet], () => redactions, performOprf)
+			assert(blocksToReveal !== 'all')
+			assert.equal(blocksToReveal.length, 1)
+			assert.ok(blocksToReveal[0].toprfs)
+
+			const revealsMap: Map<CompleteTLSPacket, MessageRevealInfo> = new Map()
+			revealsMap.set(packet, {
+				type: 'zk',
+				redactedPlaintext: blocksToReveal[0].redactedPlaintext,
+				toprfs: blocksToReveal[0].toprfs
+			})
+
+			const revealedMessages = await preparePacketsForReveal(
+				[{ sender: 'server', message: packet }],
+				revealsMap,
+				{
+					logger,
+					cipherSuite: cipherSuite,
+					zkEngine: zkEngine,
+				}
+			)
+
+			const zkReveal = revealedMessages[0].reveal?.zkReveal
+			assert.ok(zkReveal?.proofs?.length)
+			assert.ok(zkReveal?.toprfs?.length)
+
+			const x = await verifyZkPacket(
+				{
+					ciphertext,
+					zkReveal,
+					logger,
+					cipherSuite,
+					zkEngine,
+					recordNumber: 1234,
+					iv: fixedIv,
+					getNextPacket() {
+						throw new Error('should not be called in this test')
+					}
+				},
+			)
+
+			assert.deepEqual(
+				uint8ArrayToStr(x.redactedPlaintext),
+				uint8ArrayToStr(blocksToReveal[0].redactedPlaintext)
+			)
+
+			console.log(`done: ${i + 1}/${vectors.length}`)
+		}
+	})
+
+	async function performOprf(plaintext: Uint8Array) {
+		logger.info({ length: plaintext.length }, 'generating OPRF...')
+
+		const oprfOperator = makeDefaultOPRFOperator(
+			'chacha20',
+			zkEngine,
+			logger
+		)
+		const reqData = await oprfOperator.generateOPRFRequestData(
+			plaintext,
+			TOPRF_DOMAIN_SEPARATOR,
+			logger
+		)
+		const res = await toprf(
+			{
+				maskedData: reqData.maskedData,
+				engine: ZKProofEngine.ZK_ENGINE_GNARK
+			},
+			{ logger } as any
+		)
+		const nullifier = await oprfOperator.finaliseOPRF(
+			res.publicKeyShare,
+			reqData,
+			[res]
+		)
+
+		const data: TOPRFProofParams = {
+			nullifier,
+			responses: [res],
+			mask: reqData.mask,
+			dataLocation: undefined,
+			plaintext
+		}
+
+		return data
+	}
+})
+
+const ZK_TEST_MATRIX = ZK_CIPHER_SUITES.flatMap(cipherSuite => (
+	ZK_ENGINES.map(zkEngine => ({ cipherSuite, zkEngine }))
+))
+
+for(const { cipherSuite, zkEngine } of ZK_TEST_MATRIX) {
+	describe(`[${cipherSuite}]-[${zkEngine}] should generate ZK proof for ciphertext`, () => {
+		const zkProofConcurrency = zkEngine === 'snarkjs' ? 1 : undefined
+
+		it(zkEngine + '-' + cipherSuite, async() => {
+			const alg = cipherSuite.includes('CHACHA20')
+				? 'CHACHA20-POLY1305'
+				: (
+					cipherSuite.includes('AES_256_GCM')
+						? 'AES-256-GCM'
+						: 'AES-128-GCM'
+				)
+			const keylength = alg === 'AES-128-GCM' ? 16 : 32
+			const key = Buffer.alloc(keylength, 0)
+			key[0] = 1
+			key[3] = 4
+			const {
+				ivLength: fixedIvLength,
+			} = SUPPORTED_CIPHER_SUITE_MAP[cipherSuite]
+			const fixedIv = Buffer.alloc(fixedIvLength, 0)
+			fixedIv[0] = 1
+			fixedIv[3] = 4
+
+			const encKey = await crypto.importKey(alg, key)
+			const vectors = [
+				{
+					plaintext:
+						'My cool API secret is "my name jeff". Please don\'t reveal it',
+					redactions: [
+						{ fromIndex: 23, toIndex: 35 }
+					]
+				},
+				{
+					plaintext: `lorem ipsum dolor sit amet, consectetur adipiscing elit,
+				sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+				Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris
+				nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+				cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat
+				cupidatat non proident, sunt in culpa qui officia deserunt mollit anim
+				id est laborum`,
+					redactions: [
+						{ fromIndex: 5, toIndex: 15 },
+					]
+				}
+			]
+
+			const proofGenerator = await makeZkProofGenerator({
+				logger,
+				cipherSuite,
+				zkEngine,
+				zkProofConcurrency,
+			})
+			for(const { plaintext, redactions } of vectors) {
+				const plaintextArr = Buffer.from(plaintext)
+				const redactedPlaintext = redactSlices(plaintextArr, redactions)
+				// ensure redaction fn kinda works at least
+				assert.notEqual(redactedPlaintext, plaintextArr)
+
+				const { ciphertext, iv } = await encryptWrappedRecord(
+					plaintextArr,
+					{
+						key: encKey,
+						iv: fixedIv,
+						recordNumber: 1234,
+						recordHeaderOpts: { type: 'WRAPPED_RECORD' },
+						cipherSuite,
+						version: cipherSuite.includes('ECDHE_')
+							? 'TLS1_2'
+							: 'TLS1_3',
+					}
+				)
+
+				const packet: CompleteTLSPacket = {
+					type: 'ciphertext',
+					encKey,
+					iv,
+					recordNumber: 1234,
+					plaintext: plaintextArr,
+					ciphertext,
+					fixedIv: fixedIv,
+					data: ciphertext
+				}
+
+				let proofs: ZKProof[] | undefined
+				await proofGenerator.addPacketToProve(
+					packet,
+					{ type: 'zk', redactedPlaintext },
+					p => proofs = p,
+					() => {
+						throw new Error('should not be called in this test')
+					}
+				)
+				await proofGenerator.generateProofs()
+
+				const x = await verifyZkPacket(
+					{
+						ciphertext,
+						zkReveal: { proofs: proofs!, toprfs: [], oprfRawMarkers: [] },
+						logger,
+						cipherSuite,
+						zkEngine: zkEngine,
+						recordNumber: 1234,
+						iv: fixedIv,
+						getNextPacket() {
+							throw new Error('should not be called in this test')
+						}
+					},
+				)
+
+				assert.deepEqual(redactedPlaintext, x.redactedPlaintext)
+			}
+		})
+	})
+}

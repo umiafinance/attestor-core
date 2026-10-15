@@ -1,0 +1,16 @@
+services:
+  attestor:
+    build:
+      context: ./
+      # build only the backend dockerfile
+      # as it'll also build the attestor
+      dockerfile: ./attestor.dockerfile
+      args:
+        GL_TOKEN: ${GL_TOKEN}
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - 8001:8001
+    restart: on-failure
+    

@@ -1,0 +1,1170 @@
+diff --git a/src/client/utils/message-handler.ts b/src/client/utils/message-handler.ts
+index 981b23c..8a5627b 100644
+--- a/src/client/utils/message-handler.ts
++++ b/src/client/utils/message-handler.ts
+@@ -59,11 +59,17 @@ export function handleMessage(this: IAttestorSocket, msg: RPCMessage) {
+ 				{ type: rpcRequest.type },
+ 				'RPC request received before initialisation'
+ 			)
++			// Termination can make the pre-init rejection undeliverable.
+ 			void this.sendMessage({
+ 				id: msg.id,
+ 				requestError: AttestorError
+ 					.badRequest('Initialise connection first')
+ 					.toProto()
++			}).catch(err => {
++				if(err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED') {
++					return
++				}
++				this.logger.warn('failed to deliver pre-init rejection')
+ 			})
+ 			return
+ 		}
+diff --git a/src/server/handlers/claimTeeBundle.ts b/src/server/handlers/claimTeeBundle.ts
+index 4ce9344..d48962c 100644
+--- a/src/server/handlers/claimTeeBundle.ts
++++ b/src/server/handlers/claimTeeBundle.ts
+@@ -10,7 +10,8 @@ import type { CertificateInfo } from '#src/proto/tee-bundle.ts'
+ import { VerificationBundle } from '#src/proto/tee-bundle.ts'
+ import { substituteParamValues } from '#src/providers/http/index.ts'
+ import { assertValidProviderTranscript } from '#src/server/utils/assert-valid-claim-request.ts'
+-import { getAttestorAddress, niceParseJsonObject, signAsAttestor } from '#src/server/utils/generics.ts'
++import { niceParseJsonObject } from '#src/server/utils/generics.ts'
++import { signClaimResponse } from '#src/server/utils/sign-claim-response.ts'
+ import { verifyOprfMpcOutputs } from '#src/server/utils/tee-oprf-mpc-verification.ts'
+ import type { OprfVerificationResult } from '#src/server/utils/tee-oprf-verification.ts'
+ import { verifyOprfProofs } from '#src/server/utils/tee-oprf-verification.ts'
+@@ -20,7 +21,7 @@ import { verifyTeeBundle } from '#src/server/utils/tee-verification.ts'
+ import type { Logger } from '#src/types/general.ts'
+ import type { ProviderCtx, RPCHandler, Transcript } from '#src/types/index.ts'
+ import { AttestorError } from '#src/utils/error.ts'
+-import { createSignDataForClaim, getIdentifierFromClaimInfo } from '#src/utils/index.ts'
++import { getIdentifierFromClaimInfo } from '#src/utils/index.ts'
+ 
+ export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async(
+ 	teeBundleRequest,
+@@ -109,21 +110,7 @@ export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async(
+ 
+ 
+ 	// 9. Sign the response
+-	res.signatures = {
+-		attestorAddress: getAttestorAddress(
+-			client.metadata.signatureType
+-		),
+-		claimSignature: res.claim
+-			? await signAsAttestor(
+-				createSignDataForClaim(res.claim),
+-				client.metadata.signatureType
+-			)
+-			: new Uint8Array(),
+-		resultSignature: await signAsAttestor(
+-			ClaimTeeBundleResponse.encode(res).finish(),
+-			client.metadata.signatureType
+-		)
+-	}
++	await signClaimResponse(res, ClaimTeeBundleResponse, client)
+ 
+ 	logger.info('TEE bundle claim processing completed')
+ 	return res
+diff --git a/src/server/handlers/claimTunnel.ts b/src/server/handlers/claimTunnel.ts
+index 527fdd2..0058841 100644
+--- a/src/server/handlers/claimTunnel.ts
++++ b/src/server/handlers/claimTunnel.ts
+@@ -3,11 +3,10 @@ import { MAX_CLAIM_TIMESTAMP_DIFF_S } from '#src/config/index.ts'
+ import { ClaimTunnelResponse } from '#src/proto/api.ts'
+ import { getApm } from '#src/server/utils/apm.ts'
+ import { assertTranscriptsMatch, assertValidClaimRequest } from '#src/server/utils/assert-valid-claim-request.ts'
+-import { getAttestorAddress, signAsAttestor } from '#src/server/utils/generics.ts'
++import { signClaimResponse } from '#src/server/utils/sign-claim-response.ts'
+ import type { RPCHandler } from '#src/types/index.ts'
+ import {
+ 	AttestorError,
+-	createSignDataForClaim,
+ 	getIdentifierFromClaimInfo,
+ 	unixTimestampSeconds
+ } from '#src/utils/index.ts'
+@@ -94,21 +93,7 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 		res.request.transcript = []
+ 	}
+ 
+-	res.signatures = {
+-		attestorAddress: getAttestorAddress(
+-			client.metadata.signatureType
+-		),
+-		claimSignature: res.claim
+-			? await signAsAttestor(
+-				createSignDataForClaim(res.claim),
+-				client.metadata.signatureType
+-			)
+-			: new Uint8Array(),
+-		resultSignature: await signAsAttestor(
+-			ClaimTunnelResponse.encode(res).finish(),
+-			client.metadata.signatureType
+-		)
+-	}
++	await signClaimResponse(res, ClaimTunnelResponse, client)
+ 
+ 	// remove tunnel from client -- to free up our mem
+ 	client.removeTunnel(request.id)
+diff --git a/src/server/handlers/createTunnel.ts b/src/server/handlers/createTunnel.ts
+index 555509a..694f704 100644
+--- a/src/server/handlers/createTunnel.ts
++++ b/src/server/handlers/createTunnel.ts
+@@ -13,7 +13,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 		throw AttestorError.badRequest(`Tunnel "${id}" already exists`)
+ 	}
+ 
+-	const allowedHosts = client.metadata?.auth?.data?.hostWhitelist
++	const allowedHosts = client.authHostWhitelist
+ 	if(allowedHosts?.length && !allowedHosts.some(p => matchesHostPattern(p, opts.host))) {
+ 		throw AttestorError.badRequest(
+ 			`Host "${opts.host}" not allowed by auth request`
+@@ -40,8 +40,17 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 					return
+ 				}
+ 
+-				return client
+-					.sendMessage({ tunnelMessage: { tunnelId: id, message } })
++				try {
++					client.assertAuthActive()
++				} catch {
++					return
++				}
++
++				void client.sendMessage({ tunnelMessage: { tunnelId: id, message } })
++					.catch(err => {
++						if(err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED') return
++						logger.error({ err }, 'failed to forward tunnel message')
++					})
+ 			},
+ 			onClose(err) {
+ 				cancelBgp?.()
+@@ -58,6 +67,11 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 				if(!client.isOpen) {
+ 					return
+ 				}
++				try {
++					client.assertAuthActive()
++				} catch {
++					return
++				}
+ 
+ 				client.sendMessage({
+ 					tunnelDisconnectEvent: {
+@@ -87,6 +101,12 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 			)
+ 		}
+ 
++		try {
++			client.assertAuthActive()
++		} catch(err) {
++			await tunnel.close(err)
++			throw err
++		}
+ 		client.tunnels[id] = tunnel
+ 
+ 		return {}
+diff --git a/src/server/handlers/init.ts b/src/server/handlers/init.ts
+index eabf8f5..f426e13 100644
+--- a/src/server/handlers/init.ts
++++ b/src/server/handlers/init.ts
+@@ -33,6 +33,7 @@ export const init: RPCHandler<'init'> = async(
+ 		})
+ 	}
+ 
++	if(initRequest.auth?.data) client.setAuthSession(initRequest.auth.data)
+ 	client.metadata = initRequest
+ 	client.isInitialised = true
+ 
+diff --git a/src/server/socket.ts b/src/server/socket.ts
+index e138db3..3e48464 100644
+--- a/src/server/socket.ts
++++ b/src/server/socket.ts
+@@ -3,8 +3,9 @@ import type { WebSocket as WS } from 'ws'
+ 
+ import { handleMessage } from '#src/client/utils/message-handler.ts'
+ import { DEFAULT_RPC_TIMEOUT_MS } from '#src/config/index.ts'
+-import type { TunnelMessage } from '#src/proto/api.ts'
++import type { AuthenticatedUserData, RPCMessage, TunnelMessage } from '#src/proto/api.ts'
+ import { HANDLERS } from '#src/server/handlers/index.ts'
++import { AuthSession, authExpiredError } from '#src/server/utils/auth-session.ts'
+ import { getApm } from '#src/server/utils/apm.ts'
+ import { getInitialMessagesFromQuery } from '#src/server/utils/generics.ts'
+ import type { AcceptNewConnectionOpts, BGPListener, IAttestorServerSocket, Logger, RPCEvent, RPCHandler } from '#src/types/index.ts'
+@@ -16,6 +17,8 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 	tunnels: IAttestorServerSocket['tunnels'] = {}
+ 	readonly sessionId: number
+ 	readonly bgpListener: BGPListener | undefined
++	private authSession: AuthSession | undefined
++	private connectionState: 'open' | 'terminating' | 'closed' = 'open'
+ 
+ 	private constructor(
+ 		socket: WS,
+@@ -36,13 +39,70 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 		// close all tunnels when the connection is terminated
+ 		// since this tunnel can no longer be written to
+ 		this.addEventListener('connection-terminated', () => {
+-			for(const tunnelId in this.tunnels) {
+-				const tunnel = this.tunnels[tunnelId]
+-				void tunnel.close(new Error('WS session terminated'))
+-			}
++			const closeSocket = this.connectionState === 'open' && !this.isClosed
++			this.closeResources()
++			if(closeSocket) this.socket.close()
+ 		})
+ 	}
+ 
++	private closeResources() {
++		if(this.connectionState === 'closed') return
++		this.connectionState = 'closed'
++		this.authSession?.dispose()
++		for(const tunnelId in this.tunnels) {
++			const tunnel = this.tunnels[tunnelId]
++			delete this.tunnels[tunnelId]
++			try {
++				void Promise.resolve(tunnel.close(new Error('WS session terminated')))
++					.catch(err => this.logger.warn({ err }, 'failed to close tunnel'))
++			} catch(err) {
++				this.logger.warn({ err }, 'failed to close tunnel')
++			}
++		}
++	}
++
++	override async terminateConnection(err?: Error) {
++		if(this.connectionState !== 'open') return
++		this.connectionState = 'terminating'
++		try {
++			await super.terminateConnection(err)
++		} finally {
++			this.closeResources()
++		}
++	}
++
++	get authIdentity() {
++		return this.authSession?.identity
++	}
++
++	get authHostWhitelist() {
++		return this.authSession?.hostWhitelist
++	}
++
++	setAuthSession(data: AuthenticatedUserData) {
++		if(this.authSession) throw AttestorError.badRequest('Auth session already set')
++		this.authSession = new AuthSession(
++			data,
++			() => void this.terminateConnection(authExpiredError())
++				.catch(err => this.logger.error({ err }, 'failed to terminate expired auth session'))
++		)
++		this.assertAuthActive()
++	}
++
++	assertAuthActive() {
++		if(this.connectionState !== 'open') throw authExpiredError()
++		this.authSession?.assertActive()
++	}
++
++	protected override assertCanProcessMessage() {
++		this.assertAuthActive()
++	}
++
++	protected override assertCanSendMessage(msgs: Partial<RPCMessage>[]) {
++		if(msgs.length === 1 && msgs[0].connectionTerminationAlert) return
++		this.assertAuthActive()
++	}
++
+ 	getTunnel(tunnelId: number) {
+ 		const tunnel = this.tunnels[tunnelId]
+ 		if(!tunnel) {
+@@ -107,6 +167,7 @@ async function handleTunnelMessage(
+ 	{ data: { tunnelId, message } }: RPCEvent<'tunnel-message'>
+ ) {
+ 	try {
++		this.assertAuthActive()
+ 		const tunnel = this.getTunnel(tunnelId)
+ 		await tunnel.write(message)
+ 	} catch(err) {
+@@ -125,7 +186,7 @@ async function handleRpcRequest(
+ 	tx?.setLabel('requestId', requestId)
+ 	tx?.setLabel('sessionId', this.sessionId.toString())
+ 
+-	const userId = this.metadata.auth?.data?.id
++	const userId = this.authIdentity
+ 	if(userId) {
+ 		tx?.setLabel('authUserId', userId)
+ 	}
+@@ -135,17 +196,26 @@ async function handleRpcRequest(
+ 	}, DEFAULT_RPC_TIMEOUT_MS)
+ 
+ 	try {
++		this.assertAuthActive()
+ 		logger.debug({ data }, 'handling RPC request')
+ 
+ 		const handler = HANDLERS[type] as RPCHandler<typeof type>
+ 		const res = await handler(data, { client: this, logger, tx })
+-		respond(res)
++		this.assertAuthActive()
++		// Observe send failures when expiry suppresses a response.
++		await respond(res)
+ 
+ 		logger.debug({ res }, 'handled RPC request')
+ 		tx?.setOutcome('success')
+ 	} catch(err) {
+ 		logger.error({ err }, 'error in RPC request')
+-		respond(AttestorError.fromError(err))
++		try {
++			await respond(AttestorError.fromError(err))
++		} catch(sendErr) {
++			if(!(sendErr instanceof AttestorError && sendErr.code === 'ERROR_AUTHENTICATION_FAILED')) {
++				logger.warn('failed to deliver RPC error response')
++			}
++		}
+ 		tx?.setOutcome('failure')
+ 
+ 		apm?.captureError(err, { parent: tx })
+@@ -153,4 +223,4 @@ async function handleRpcRequest(
+ 		clearTimeout(timeout)
+ 		tx?.end()
+ 	}
+-}
+\ No newline at end of file
++}
+diff --git a/src/server/utils/auth-session.ts b/src/server/utils/auth-session.ts
+new file mode 100644
+index 0000000..c1156e3
+--- /dev/null
++++ b/src/server/utils/auth-session.ts
+@@ -0,0 +1,79 @@
++import type { AuthenticatedUserData } from '#src/proto/api.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++type Timer = ReturnType<typeof setTimeout>
++export type AuthClock = {
++	nowMs(): number
++	setTimeout(callback: () => void, delayMs: number): Timer
++	clearTimeout(timer: Timer): void
++}
++
++const SYSTEM_CLOCK: AuthClock = {
++	nowMs: Date.now,
++	setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
++	clearTimeout: timer => clearTimeout(timer)
++}
++const MAX_TIMEOUT_MS = 2_147_483_647
++
++export function authExpiredError() {
++	return new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Authentication expired')
++}
++
++export class AuthSession {
++	readonly identity: string
++	readonly hostWhitelist: readonly string[]
++	private readonly deadlineMs: number
++	private readonly onExpire: () => void
++	private readonly clock: AuthClock
++	private timer: Timer | undefined
++	private disposed = false
++
++	constructor(
++		data: AuthenticatedUserData,
++		onExpire: () => void,
++		clock: AuthClock = SYSTEM_CLOCK
++	) {
++		this.identity = data.id
++		this.hostWhitelist = Object.freeze([...data.hostWhitelist])
++		this.deadlineMs = data.expiresAt * 1000
++		this.onExpire = onExpire
++		this.clock = clock
++		this.arm()
++	}
++
++	assertActive() {
++		if(this.clock.nowMs() >= this.deadlineMs) {
++			this.expire()
++			throw authExpiredError()
++		}
++	}
++
++	dispose() {
++		if(this.disposed) return
++		this.disposed = true
++		if(this.timer !== undefined) this.clock.clearTimeout(this.timer)
++		this.timer = undefined
++	}
++
++	private arm() {
++		if(this.disposed) return
++		const remainingMs = this.deadlineMs - this.clock.nowMs()
++		if(remainingMs <= 0) {
++			this.expire()
++			return
++		}
++		this.timer = this.clock.setTimeout(
++			() => {
++				this.timer = undefined
++				this.arm()
++			},
++			Math.min(remainingMs, MAX_TIMEOUT_MS)
++		)
++	}
++
++	private expire() {
++		if(this.disposed) return
++		this.dispose()
++		this.onExpire()
++	}
++}
+diff --git a/src/server/utils/sign-claim-response.ts b/src/server/utils/sign-claim-response.ts
+new file mode 100644
+index 0000000..f3fd5c9
+--- /dev/null
++++ b/src/server/utils/sign-claim-response.ts
+@@ -0,0 +1,24 @@
++import type { ClaimTeeBundleResponse, ClaimTunnelResponse } from '#src/proto/api.ts'
++import { getAttestorAddress, signAsAttestor } from '#src/server/utils/generics.ts'
++import type { IAttestorServerSocket } from '#src/types/index.ts'
++import { createSignDataForClaim } from '#src/utils/claims.ts'
++
++type SignableResponse = ClaimTunnelResponse | ClaimTeeBundleResponse
++type SignerClient = Pick<IAttestorServerSocket, 'metadata' | 'assertAuthActive'>
++
++export async function signClaimResponse<T extends SignableResponse>(
++	response: T,
++	codec: { encode(message: T): { finish(): Uint8Array } },
++	client: SignerClient
++) {
++	client.assertAuthActive()
++	const signatureType = client.metadata.signatureType
++	const attestorAddress = getAttestorAddress(signatureType)
++	const claimSignature = response.claim
++		? await signAsAttestor(createSignDataForClaim(response.claim), signatureType)
++		: new Uint8Array()
++	client.assertAuthActive()
++	const resultSignature = await signAsAttestor(codec.encode(response).finish(), signatureType)
++	client.assertAuthActive()
++	response.signatures = { attestorAddress, claimSignature, resultSignature }
++}
+diff --git a/src/tests/auth-lifetime.test.ts b/src/tests/auth-lifetime.test.ts
+new file mode 100644
+index 0000000..bc3d988
+--- /dev/null
++++ b/src/tests/auth-lifetime.test.ts
+@@ -0,0 +1,107 @@
++import assert from 'node:assert/strict'
++import { describe, it, mock } from 'node:test'
++import { Wallet } from 'ethers'
++
++import { AuthSession, type AuthClock } from '#src/server/utils/auth-session.ts'
++import { assertValidAuthRequest, createAuthRequest } from '#src/utils/auth.ts'
++import { SelectedServiceSignatureType } from '#src/utils/signatures/index.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++class FakeClock implements AuthClock {
++	ms = 0
++	cleared = 0
++	private nextId = 0
++	private timers = new Map<number, { at: number, callback: () => void }>()
++
++	nowMs() { return this.ms }
++	setTimeout(callback: () => void, delayMs: number) {
++		const id = ++this.nextId
++		this.timers.set(id, { at: this.ms + delayMs, callback })
++		return id as unknown as ReturnType<typeof setTimeout>
++	}
++	clearTimeout(timer: ReturnType<typeof setTimeout>) {
++		if(this.timers.delete(timer as unknown as number)) this.cleared++
++	}
++	advanceTo(ms: number) {
++		this.ms = ms
++		while(true) {
++			const due = [...this.timers].find(([, timer]) => timer.at <= ms)
++			if(!due) break
++			this.timers.delete(due[0])
++			due[1].callback()
++		}
++	}
++	get pending() { return this.timers.size }
++}
++
++function authData(expiresAt: number) {
++	return { id: 'session', createdAt: 0, expiresAt, hostWhitelist: ['example.com'] }
++}
++
++function isAuthError(err: unknown) {
++	return err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED'
++}
++
++describe('auth deadline', () => {
++	it('allows before expiry and rejects at equality; activity does not change the deadline', () => {
++		const clock = new FakeClock()
++		clock.ms = 9_000
++		let closes = 0
++		const lifetime = new AuthSession(authData(10), () => closes++, clock)
++		for(const ms of [9_100, 9_500, 9_999]) {
++			clock.advanceTo(ms)
++			lifetime.assertActive()
++		}
++		clock.advanceTo(10_000)
++		assert.throws(() => lifetime.assertActive(), isAuthError)
++		assert.equal(closes, 1)
++		assert.equal(clock.pending, 0)
++		lifetime.dispose()
++		assert.equal(closes, 1)
++	})
++
++	it('clears its timer once on close or error and expires one session without closing another', () => {
++		const clock = new FakeClock()
++		const closed: string[] = []
++		const a = new AuthSession(authData(10), () => closed.push('a'), clock)
++		const b = new AuthSession(authData(20), () => closed.push('b'), clock)
++		clock.advanceTo(10_000)
++		assert.deepEqual(closed, ['a'])
++		b.assertActive()
++		b.dispose()
++		b.dispose()
++		clock.advanceTo(20_000)
++		assert.deepEqual(closed, ['a'])
++		assert.equal(clock.pending, 0)
++		assert.equal(clock.cleared, 1)
++		a.dispose()
++	})
++
++	it('rejects missing, invalid, and expired init authentication, including equality', async() => {
++		const key = Wallet.createRandom()
++		process.env.AUTHENTICATION_PUBLIC_KEY = key.publicKey
++		const now = 100_000
++		const dateMock = mock.method(Date, 'now', () => now * 1000)
++		try {
++			await assert.rejects(
++				assertValidAuthRequest(undefined, SelectedServiceSignatureType),
++				isAuthError
++			)
++			const valid = await createAuthRequest({ expiresAt: now + 1 }, key.privateKey)
++			await assertValidAuthRequest(valid, SelectedServiceSignatureType)
++			for(const auth of [
++				await createAuthRequest({ expiresAt: now + 1 }, Wallet.createRandom().privateKey),
++				await createAuthRequest({ expiresAt: now }, key.privateKey),
++				await createAuthRequest({ expiresAt: now - 1 }, key.privateKey)
++			]) {
++				await assert.rejects(
++					assertValidAuthRequest(auth, SelectedServiceSignatureType),
++					isAuthError
++				)
++			}
++		} finally {
++			dateMock.mock.restore()
++			delete process.env.AUTHENTICATION_PUBLIC_KEY
++		}
++	})
++})
+diff --git a/src/tests/auth-rpc-response-lifetime.test.ts b/src/tests/auth-rpc-response-lifetime.test.ts
+new file mode 100644
+index 0000000..ba17da7
+--- /dev/null
++++ b/src/tests/auth-rpc-response-lifetime.test.ts
+@@ -0,0 +1,180 @@
++import assert from 'node:assert/strict'
++import { execFile } from 'node:child_process'
++import { describe, it } from 'node:test'
++import { fileURLToPath } from 'node:url'
++import { promisify } from 'node:util'
++
++import type { AttestorServerSocket as ServerSocket } from '#src/server/socket.ts'
++
++const runChild = promisify(execFile)
++const SCENARIO_ENV = 'AUTH_RESPONSE_RACE_SCENARIO'
++
++if(process.env[SCENARIO_ENV]) {
++	await runScenario(process.env[SCENARIO_ENV])
++} else {
++	describe('RPC response delivery across auth expiry', () => {
++		for(const scenario of ['handler-crosses-deadline', 'termination-alert-pending', 'success-send-terminates', 'pre-init-rejection-terminates']) {
++			it(`${scenario} does not crash or deliver a useful result`, async() => {
++				const { stdout } = await runChild(
++					process.execPath,
++					[
++						'--unhandled-rejections=strict',
++						'--experimental-strip-types',
++						fileURLToPath(import.meta.url)
++					],
++					{
++						env: { ...process.env, NODE_OPTIONS: '', [SCENARIO_ENV]: scenario },
++						timeout: 10_000
++					}
++				)
++				assert.ok(stdout.split('\n').includes(`PASS ${scenario}`))
++			})
++		}
++	})
++}
++
++async function runScenario(scenario: string) {
++	process.env.CLAIM_EPOCH = '2'
++	process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000001'
++	const { setCryptoImplementation } = await import('@reclaimprotocol/tls')
++	const { webcryptoCrypto } = await import('@reclaimprotocol/tls/webcrypto')
++	setCryptoImplementation(webcryptoCrypto)
++	const [{ AttestorServerSocket }, { HANDLERS }, { handleMessage }, { authExpiredError }, { RPCMessages }, { AttestorError }] = await Promise.all([
++		import('#src/server/socket.ts'),
++		import('#src/server/handlers/index.ts'),
++		import('#src/client/utils/message-handler.ts'),
++		import('#src/server/utils/auth-session.ts'),
++		import('#src/proto/api.ts'),
++		import('#src/utils/error.ts')
++	])
++
++	function deferred() {
++		let resolve!: () => void
++		const promise = new Promise<void>(r => { resolve = r })
++		return { promise, resolve }
++	}
++
++	class FakeSocket extends EventTarget {
++		readonly OPEN = 1
++		readonly CLOSING = 2
++		readonly CLOSED = 3
++		readyState = this.OPEN
++		readonly sent: string[] = []
++		readonly alertSent = deferred()
++		readonly releaseAlert = deferred()
++		private readonly holdAlert: boolean
++		constructor(holdAlert: boolean) {
++			super()
++			this.holdAlert = holdAlert
++		}
++		async sendPromise(bytes: Uint8Array) {
++			for(const msg of RPCMessages.decode(bytes).messages) {
++				if(msg.connectionTerminationAlert) {
++					this.sent.push('termination')
++					this.alertSent.resolve()
++					if(this.holdAlert) {await this.releaseAlert.promise}
++				} else if(msg.createTunnelResponse) {
++					this.sent.push('useful-result')
++				} else {
++					this.sent.push('other-response')
++				}
++			}
++		}
++		close() {
++			this.readyState = this.CLOSED
++			this.dispatchEvent(new Event('close'))
++		}
++	}
++
++	const logger = { child() { return this }, trace() {}, debug() {}, info() {}, warn() {}, error() {} }
++	function makeSession(identity: string, expiresAt: number, holdAlert: boolean) {
++		const socket = new FakeSocket(holdAlert)
++		// Use the real server socket and inherited handleMessage responder with a controlled transport.
++		const server = Reflect.construct(AttestorServerSocket, [socket, 1, undefined, logger]) as ServerSocket
++		Object.assign(server, { isInitialised: true, metadata: { signatureType: 1, clientVersion: 1 } })
++		server.setAuthSession({ id: identity, createdAt: 1, expiresAt, hostWhitelist: ['example.com'] })
++		return { server, socket }
++	}
++
++	const entered = deferred()
++	const releaseHandler = deferred()
++	let handlerCalls = 0
++	HANDLERS.createTunnel = async(_request, { client }) => {
++		handlerCalls++
++		if(client.authIdentity === 'live' || scenario === 'success-send-terminates') {return {}}
++		entered.resolve()
++		await releaseHandler.promise
++		return {}
++	}
++	async function assertLiveSession() {
++		const live = makeSession('live', Math.floor(Date.now() / 1000) + 30, false)
++		await handleMessage.call(live.server, {
++			id: 2,
++			createTunnelRequest: { id: 2, host: 'example.com', port: 443 }
++		})
++		assert.deepEqual(live.socket.sent, ['useful-result'])
++		await live.server.terminateConnection()
++	}
++
++	if(scenario === 'pre-init-rejection-terminates') {
++		const socket = new FakeSocket(true)
++		const server = Reflect.construct(AttestorServerSocket, [socket, 1, undefined, logger]) as ServerSocket
++		assert.equal(server.isInitialised, false)
++		void server.terminateConnection(authExpiredError())
++		await socket.alertSent.promise
++		await handleMessage.call(server, {
++			id: 1,
++			createTunnelRequest: { id: 1, host: 'example.com', port: 443 }
++		})
++		assert.equal(server.isInitialised, false)
++		assert.equal(handlerCalls, 0)
++		assert.deepEqual(socket.sent, ['termination'])
++		socket.releaseAlert.resolve()
++		while(!server.isClosed) {await new Promise(resolve => setTimeout(resolve, 1))}
++		await assertLiveSession()
++		process.stdout.write(`PASS ${scenario}\n`)
++		return
++	}
++
++	const expiresAt = Math.floor(Date.now() / 1000) + (scenario === 'handler-crosses-deadline' ? 2 : 30)
++	const expired = makeSession('expired', expiresAt, true)
++	if(scenario === 'success-send-terminates') {
++		const assertAuthActive = expired.server.assertAuthActive.bind(expired.server)
++		let checks = 0
++		expired.server.assertAuthActive = () => {
++			if(++checks === 3) {void expired.server.terminateConnection(authExpiredError())}
++			assertAuthActive()
++		}
++	}
++	const request = handleMessage.call(expired.server, {
++		id: 1,
++		createTunnelRequest: { id: 1, host: 'example.com', port: 443 }
++	})
++	assert.ok(request)
++	if(scenario === 'success-send-terminates') {
++		await request
++	} else {
++		const rejected = assert.rejects(request, (err: unknown) =>
++			err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED'
++		)
++		await entered.promise
++		if(scenario === 'handler-crosses-deadline') {
++			// Block timer callbacks so the post-handler deadline guard detects expiry first.
++			while(Date.now() < expiresAt * 1000 + 20) {}
++		} else if(scenario === 'termination-alert-pending') {
++			void expired.server.terminateConnection(authExpiredError())
++			await expired.socket.alertSent.promise
++		} else {
++			throw new Error('unknown scenario')
++		}
++		releaseHandler.resolve()
++		await rejected
++	}
++	await expired.socket.alertSent.promise
++	assert.deepEqual(expired.socket.sent, ['termination'])
++	expired.socket.releaseAlert.resolve()
++	while(!expired.server.isClosed) {await new Promise(resolve => setTimeout(resolve, 1))}
++
++	await assertLiveSession()
++	process.stdout.write(`PASS ${scenario}\n`)
++}
+diff --git a/src/tests/auth-signing-deadline.test.ts b/src/tests/auth-signing-deadline.test.ts
+new file mode 100644
+index 0000000..e2d5817
+--- /dev/null
++++ b/src/tests/auth-signing-deadline.test.ts
+@@ -0,0 +1,139 @@
++import assert from 'node:assert/strict'
++import { describe, it, mock } from 'node:test'
++
++import { AttestorError } from '#src/utils/error.ts'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++
++const claimInfo = {
++	provider: 'http', parameters: '{}', context: '{}',
++	owner: '0x0000000000000000000000000000000000000001',
++	timestampS: Math.floor(Date.now() / 1000)
++}
++const logger = { info() {}, debug() {}, warn() {}, error() {} }
++let validationWait: (() => Promise<void>) | undefined
++
++mock.module('#src/server/utils/assert-valid-claim-request.ts', {
++	namedExports: {
++		assertTranscriptsMatch() {},
++		async assertValidClaimRequest() {
++			await validationWait?.()
++			return { ...claimInfo }
++		},
++		async assertValidProviderTranscript() {
++			await validationWait?.()
++			return { ...claimInfo }
++		}
++	}
++})
++mock.module('#src/server/utils/tee-verification.ts', {
++	namedExports: {
++		async verifyTeeBundle() {
++			return { kOutputPayload: { timestampMs: claimInfo.timestampS * 1000 }, tOutputPayload: {} }
++		}
++	}
++})
++mock.module('#src/server/utils/tee-transcript-reconstruction.ts', {
++	namedExports: {
++		async reconstructTlsTranscript() {
++			return { revealedRequest: new Uint8Array(), reconstructedResponse: new Uint8Array() }
++		}
++	}
++})
++
++const [{ claimTunnel }, { claimTeeBundle }, { ServiceSignatureType, AttestorVersion, ClaimTunnelRequest, ClaimTeeBundleRequest }, { SIGNATURES }] = await Promise.all([
++	import('#src/server/handlers/claimTunnel.ts'),
++	import('#src/server/handlers/claimTeeBundle.ts'),
++	import('#src/proto/api.ts'),
++	import('#src/utils/signatures/index.ts')
++])
++const signatureType = ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH
++
++function deferred() {
++	let resolve!: () => void
++	const promise = new Promise<void>(r => { resolve = r })
++	return { promise, resolve }
++}
++
++function setup() {
++	let now = 9
++	const client = {
++		metadata: { signatureType, clientVersion: AttestorVersion.ATTESTOR_VERSION_3_2_0 },
++		assertAuthActive() {
++			if(now >= 10) throw new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Authentication expired')
++		},
++		getTunnel() {
++			return {
++				createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '' }, transcript: [], async close() {}
++			}
++		},
++		removeTunnel() {},
++	}
++	return { client, expire: () => { now = 10 } }
++}
++
++function request(kind: 'tunnel' | 'tee', client: ReturnType<typeof setup>['client']) {
++	const ctx = { logger, client } as unknown as Parameters<typeof claimTunnel>[1]
++	if(kind === 'tunnel') {
++		return claimTunnel(ClaimTunnelRequest.create({
++			request: { id: 1, host: 'example.com', port: 443 },
++			data: { timestampS: claimInfo.timestampS }
++		}), ctx)
++	}
++	return claimTeeBundle(ClaimTeeBundleRequest.create({
++		verificationBundle: new Uint8Array(), data: { ...claimInfo }
++	}), ctx)
++}
++
++function isAuthError(err: unknown) {
++	return err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED'
++}
++
++for(const kind of ['tunnel', 'tee'] as const) {
++	describe(`${kind} auth deadline`, () => {
++		it('rejects when validation crosses the deadline before either signature', async() => {
++			const entered = deferred()
++			const release = deferred()
++			validationWait = async() => { entered.resolve(); await release.promise }
++			const session = setup()
++			const sign = mock.method(SIGNATURES[signatureType], 'sign')
++			try {
++				const pending = request(kind, session.client)
++				await entered.promise
++				session.expire()
++				release.resolve()
++				await assert.rejects(pending, isAuthError)
++				assert.equal(sign.mock.calls.length, 0)
++			} finally {
++				sign.mock.restore()
++				validationWait = undefined
++			}
++		})
++
++		for(const heldSign of [1, 2]) {
++			it(`suppresses delivery when signature ${heldSign} resolves after expiry`, async() => {
++				const entered = deferred()
++				const release = deferred()
++				validationWait = undefined
++				const session = setup()
++				let calls = 0
++				const sign = mock.method(SIGNATURES[signatureType], 'sign', async() => {
++					calls++
++					if(calls === heldSign) { entered.resolve(); await release.promise }
++					return new Uint8Array([1])
++				})
++				try {
++					const pending = request(kind, session.client)
++					await entered.promise
++					session.expire()
++					release.resolve()
++					await assert.rejects(pending, isAuthError)
++					assert.equal(calls, heldSign)
++				} finally {
++					sign.mock.restore()
++				}
++			})
++		}
++	})
++}
+diff --git a/src/tests/auth-socket-lifetime.test.ts b/src/tests/auth-socket-lifetime.test.ts
+new file mode 100644
+index 0000000..6653e34
+--- /dev/null
++++ b/src/tests/auth-socket-lifetime.test.ts
+@@ -0,0 +1,118 @@
++import assert from 'node:assert/strict'
++import { setTimeout as delay } from 'node:timers/promises'
++import { it } from 'node:test'
++import { Wallet } from 'ethers'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++process.env.DISABLE_BGP_CHECKS = '1'
++
++const [{ AttestorClient }, { WS_PATHNAME }, { createServer }, { getRandomPort }, { createAuthRequest }, { AttestorError }] = await Promise.all([
++	import('#src/client/utils/client-socket.ts'),
++	import('#src/config/index.ts'),
++	import('#src/server/create-server.ts'),
++	import('#src/tests/utils.ts'),
++	import('#src/utils/auth.ts'),
++	import('#src/utils/error.ts')
++])
++
++function isAuthError(err: unknown) {
++	return err instanceof AttestorError && err.code === 'ERROR_AUTHENTICATION_FAILED'
++}
++
++function isRejectedInit(err: unknown) {
++	return isAuthError(err)
++		|| err instanceof AttestorError
++			&& err.code === 'ERROR_NETWORK_ERROR'
++			&& err.message === 'connection closed'
++}
++
++it('rejects bad WS init and closes an active tunnel at fixed expiry despite activity', async() => {
++	const key = Wallet.createRandom()
++	process.env.AUTHENTICATION_PUBLIC_KEY = key.publicKey
++	const port = getRandomPort()
++	const server = await createServer(port)
++	const url = `ws://127.0.0.1:${port}${WS_PATHNAME}`
++	let a: InstanceType<typeof AttestorClient> | undefined
++	let b: InstanceType<typeof AttestorClient> | undefined
++	try {
++		const missing = new AttestorClient({ url })
++		await assert.rejects(missing.waitForInit(), isRejectedInit)
++		assert.equal(missing.isInitialised, false)
++		const wrong = await createAuthRequest(
++			{ id: 'wrong', hostWhitelist: ['example.com'] },
++			Wallet.createRandom().privateKey
++		)
++		const invalid = new AttestorClient({ url, authRequest: wrong })
++		await assert.rejects(invalid.waitForInit(), isRejectedInit)
++		assert.equal(invalid.isInitialised, false)
++		assert.equal([...server.clients].some(ws => ws.serverSocket), false)
++
++		const expiresAt = Math.floor(Date.now() / 1000) + 3
++		const authA = await createAuthRequest(
++			{ id: 'a', hostWhitelist: ['example.com'], expiresAt }, key.privateKey
++		)
++		const authB = await createAuthRequest(
++			{ id: 'b', hostWhitelist: ['example.com'], expiresAt: expiresAt + 10 }, key.privateKey
++		)
++		a = new AttestorClient({ url, authRequest: authA })
++		await a.waitForInit()
++		const wsA = [...server.clients].find(ws => ws.serverSocket?.authIdentity === 'a')
++		assert.ok(wsA)
++		const socketA = wsA.serverSocket
++		assert.ok(socketA)
++		assert.equal(socketA.authIdentity, 'a')
++		assert.deepEqual(socketA.authHostWhitelist, ['example.com'])
++		assert.equal(Object.isFrozen(socketA.authHostWhitelist), true)
++		authA.data!.hostWhitelist.push('another.example')
++		assert.deepEqual(socketA.authHostWhitelist, ['example.com'])
++
++		b = new AttestorClient({ url, authRequest: authB })
++		await b.waitForInit()
++		const wsB = [...server.clients].find(ws => ws.serverSocket?.authIdentity === 'b')
++		assert.ok(wsB)
++		const socketB = wsB.serverSocket
++		assert.ok(socketB)
++		let writes = 0
++		let closes = 0
++		const activeTunnel = {
++			async write() { writes++ },
++			async close() { closes++ },
++			createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '' }, transcript: []
++		}
++		socketA.tunnels[7] = activeTunnel
++		const activity = setInterval(() => {
++			if(wsA.readyState === wsA.OPEN) wsA.ping()
++			void a?.sendMessage({ tunnelMessage: { tunnelId: 7, message: new Uint8Array([1]) } }).catch(() => {})
++		}, 100)
++		try {
++			while(Date.now() < expiresAt * 1000 + 250) await delay(50)
++		} finally {
++			clearInterval(activity)
++		}
++		assert.ok(writes > 0)
++		assert.equal(a.isClosed, true)
++		assert.equal(closes, 1)
++		assert.deepEqual(socketA.tunnels, {})
++		socketA.tunnels[7] = activeTunnel
++		const writesAfterExpiry = writes
++		socketA.dispatchRPCEvent('tunnel-message', { tunnelId: 7, message: new Uint8Array([1]) })
++		await delay(0)
++		assert.equal(writes, writesAfterExpiry)
++		delete socketA.tunnels[7]
++		assert.equal(b.isOpen, true)
++		await assert.rejects(
++			socketA.sendMessage({ tunnelMessage: { tunnelId: 7, message: new Uint8Array([1]) } }),
++			isAuthError
++		)
++		await b.sendMessage({ connectionTerminationAlert: new AttestorError('ERROR_NO_ERROR', '').toProto() })
++		for(let i = 0; i < 40 && !b.isClosed; i++) await delay(10)
++		assert.equal(b.isClosed, true)
++		assert.throws(() => socketB.assertAuthActive(), isAuthError)
++	} finally {
++		await a?.terminateConnection()
++		await b?.terminateConnection()
++		await new Promise<void>(resolve => server.close(() => resolve()))
++		delete process.env.AUTHENTICATION_PUBLIC_KEY
++	}
++})
+diff --git a/src/tests/auth-tunnel-forwarding.test.ts b/src/tests/auth-tunnel-forwarding.test.ts
+new file mode 100644
+index 0000000..91fbe6f
+--- /dev/null
++++ b/src/tests/auth-tunnel-forwarding.test.ts
+@@ -0,0 +1,50 @@
++import assert from 'node:assert/strict'
++import { setTimeout as delay } from 'node:timers/promises'
++import { it, mock } from 'node:test'
++
++import type { makeTcpTunnel } from '#src/server/tunnels/make-tcp-tunnel.ts'
++import { CreateTunnelRequest } from '#src/proto/api.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++let onMessage: ((data: Uint8Array) => void) | undefined
++let closes = 0
++mock.module('#src/server/tunnels/make-tcp-tunnel.ts', {
++	namedExports: {
++		async makeTcpTunnel(opts: Parameters<typeof makeTcpTunnel>[0]) {
++			onMessage = opts.onMessage
++			return {
++				createRequest: opts,
++				transcript: [],
++				async write() {},
++				async close() { closes++ }
++			}
++		}
++	}
++})
++
++const { createTunnel } = await import('#src/server/handlers/createTunnel.ts')
++const logger = { info() {}, debug() {}, warn() {}, error() {} }
++
++it('allows a tunnel packet before expiry and blocks TCP-to-WS forwarding after expiry', async() => {
++	let active = true
++	const sent: unknown[] = []
++	const client = {
++		tunnels: {},
++		isOpen: true,
++		authHostWhitelist: Object.freeze(['example.com']),
++		assertAuthActive() {
++			if(!active) throw new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Authentication expired')
++		},
++		async sendMessage(message: unknown) { sent.push(message) }
++	}
++	await createTunnel(CreateTunnelRequest.create({ id: 7, host: 'example.com', port: 443 }),
++		{ client, logger } as unknown as Parameters<typeof createTunnel>[1])
++	onMessage!(new Uint8Array([1]))
++	await delay(0)
++	assert.equal(sent.length, 1)
++	active = false
++	onMessage!(new Uint8Array([2]))
++	await delay(0)
++	assert.equal(sent.length, 1)
++	assert.equal(closes, 0)
++})
+diff --git a/src/tests/claim-epoch.test.ts b/src/tests/claim-epoch.test.ts
+index 5197b4e..6a5050f 100644
+--- a/src/tests/claim-epoch.test.ts
++++ b/src/tests/claim-epoch.test.ts
+@@ -54,6 +54,7 @@ const verify = signatures.SIGNATURES[signatureType].verify
+ const wrongSigner = '0x0000000000000000000000000000000000000002'
+ const client = {
+ 	metadata: { signatureType, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
++	assertAuthActive() {},
+ 	getTunnel() {
+ 		return {
+ 			createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '' },
+diff --git a/src/types/client.ts b/src/types/client.ts
+index 3d0351b..1b4bbde 100644
+--- a/src/types/client.ts
++++ b/src/types/client.ts
+@@ -1,7 +1,7 @@
+ import type { IncomingMessage } from 'http'
+ import type { WebSocket as WSWebSocket } from 'ws'
+ 
+-import type { AuthenticationRequest, InitRequest, InitResponse, RPCMessage, RPCMessages, ServiceSignatureType, TunnelMessage } from '#src/proto/api.ts'
++import type { AuthenticatedUserData, AuthenticationRequest, InitRequest, InitResponse, RPCMessage, RPCMessages, ServiceSignatureType, TunnelMessage } from '#src/proto/api.ts'
+ import type { BGPListener } from '#src/types/bgp.ts'
+ import type { Logger } from '#src/types/general.ts'
+ import type { RPCEvent, RPCEventMap, RPCEventType, RPCRequestData, RPCResponseData, RPCType } from '#src/types/rpc.ts'
+@@ -153,6 +153,11 @@ export declare class IAttestorServerSocket extends IAttestorSocket {
+ 
+ 	removeTunnel(tunnelId: TunnelMessage['tunnelId']): void
+ 
++	setAuthSession(data: AuthenticatedUserData): void
++	assertAuthActive(): void
++	readonly authHostWhitelist: readonly string[] | undefined
++	readonly authIdentity: string | undefined
++
+ 	bgpListener?: BGPListener
+ }
+ 
+diff --git a/src/types/rpc.ts b/src/types/rpc.ts
+index f1d4b5b..4478e40 100644
+--- a/src/types/rpc.ts
++++ b/src/types/rpc.ts
+@@ -18,7 +18,7 @@ export type RPCRequest<T extends RPCType> = {
+ 	requestId: RPCMessage['id']
+ 	type: T
+ 	data: RPCRequestData<T>
+-	respond(res: RPCResponseData<T> | AttestorError): void
++	respond(res: RPCResponseData<T> | AttestorError): Promise<unknown> | void
+ }
+ 
+ export type RPCResponse<T extends RPCType> = {
+diff --git a/src/utils/auth.ts b/src/utils/auth.ts
+index 455e9cb..5f20135 100644
+--- a/src/utils/auth.ts
++++ b/src/utils/auth.ts
+@@ -42,7 +42,7 @@ export async function assertValidAuthRequest(
+ 		)
+ 	}
+ 
+-	if(data.expiresAt < unixTimestampSeconds()) {
++	if(!Number.isSafeInteger(data.expiresAt) || data.expiresAt <= unixTimestampSeconds()) {
+ 		throw new AttestorError(
+ 			'ERROR_AUTHENTICATION_FAILED',
+ 			'Authentication request has expired'
+@@ -56,6 +56,12 @@ export async function assertValidAuthRequest(
+ 	)
+ 	const verified = await signatureAlg
+ 		.verify(proto, signature, address)
++	if(data.expiresAt <= unixTimestampSeconds()) {
++		throw new AttestorError(
++			'ERROR_AUTHENTICATION_FAILED',
++			'Authentication request has expired'
++		)
++	}
+ 	if(!verified) {
+ 		throw new AttestorError(
+ 			'ERROR_AUTHENTICATION_FAILED',
+diff --git a/src/utils/socket-base.ts b/src/utils/socket-base.ts
+index 7d50c3c..e0e4dec 100644
+--- a/src/utils/socket-base.ts
++++ b/src/utils/socket-base.ts
+@@ -51,6 +51,7 @@ export class AttestorSocket implements IAttestorSocket {
+ 		// @ts-expect-error - WebSocket type differs between browser and Node.js
+ 		socket.addEventListener('message', async(event: MessageEvent) => {
+ 			try {
++				this.assertCanProcessMessage()
+ 				await wsMessageHandler.call(this, event.data)
+ 			} catch(err) {
+ 				this.logger.error({ err }, 'error processing message')
+@@ -67,7 +68,12 @@ export class AttestorSocket implements IAttestorSocket {
+ 			|| this.socket.readyState === this.socket.CLOSING
+ 	}
+ 
++	protected assertCanProcessMessage() {}
++
++	protected assertCanSendMessage(_msgs: Partial<RPCMessage>[]) {}
++
+ 	async sendMessage(...msgs: Partial<RPCMessage>[]) {
++		this.assertCanSendMessage(msgs)
+ 		if(this.isClosed) {
+ 			throw new AttestorError(
+ 				'ERROR_NETWORK_ERROR',

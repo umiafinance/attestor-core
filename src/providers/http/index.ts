@@ -1,0 +1,1032 @@
+import type { TLSConnectionOptions } from '@reclaimprotocol/tls'
+import { areUint8ArraysEqual, concatenateUint8Arrays, uint8ArrayToBinaryStr } from '@reclaimprotocol/tls'
+import { encodeBase64 } from 'ethers'
+
+import { DEFAULT_HTTPS_PORT, RECLAIM_USER_AGENT } from '#src/config/index.ts'
+import { AttestorVersion } from '#src/proto/api.ts'
+import {
+	buildHeaders,
+	convertResponsePosToAbsolutePos,
+	extractHTMLElementsIndexes,
+	extractJSONValueIndexes,
+	getRedactionsForChunkHeaders,
+	makeRegex,
+	matchRedactedStrings,
+	parseHttpResponse,
+} from '#src/providers/http/utils.ts'
+import { isValidProxySessionId } from '#src/server/utils/proxy-session.ts'
+import type {
+	ArraySlice,
+	Provider,
+	ProviderCtx,
+	ProviderParams,
+	ProviderSecretParams,
+	RedactedOrHashedArraySlice
+} from '#src/types/index.ts'
+import { getEnvVariable } from '#src/utils/env.ts'
+import {
+	extractRequestBufferFromTranscript,
+	findIndexInUint8Array,
+	getHttpRequestDataFromTranscript,
+	logger,
+	makeHttpResponseParser,
+	REDACTION_CHAR,
+	REDACTION_CHAR_CODE,
+	strToUint8Array,
+	uint8ArrayToStr,
+} from '#src/utils/index.ts'
+
+const OK_HTTP_HEADER = 'HTTP/1.1 200'
+
+// we need to ensure the HTTP line (METHOD <path> HTTP/1.1) does not
+// contain another request smuggled in, so we set the maximum number of
+// redactions in the path to be less than the length of the minimum valid HTTP
+// request line that can create a smuggle-able tunnel
+// Should be about 59 chars
+const MIN_INJECTION_STR
+	= ' HTTP/1.1\r\n\r\n'
+
+const MAX_REDACTIONS_IN_PATH = +(
+	getEnvVariable('HTTP_MAX_REDACTIONS_IN_PATH')
+	?? (MIN_INJECTION_STR.length - 1)
+)
+const dateHeaderRegex = '[dD]ate: ((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:[0-3][0-9]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?:[0-9]{4}) (?:[01][0-9]|2[0-3])(?::[0-5][0-9]){2} GMT)'
+const dateDiff = 1000 * 60 * 10 // allow 10 min difference
+
+type HTTPProviderParams = ProviderParams<'http'>
+
+type HTTPResponseRedaction = Exclude<HTTPProviderParams['responseRedactions'], undefined>[number]
+
+const HTTP_PROVIDER: Provider<'http'> = {
+	hostPort: getHostPort,
+	writeRedactionMode(params) {
+		return ('writeRedactionMode' in params)
+			? params.writeRedactionMode
+			: undefined
+	},
+	geoLocation(params, secretParams) {
+		return ('geoLocation' in params)
+			? getGeoLocation(params, secretParams)
+			: undefined
+	},
+	proxySessionId(params, secretParams) {
+		return ('proxySessionId' in params)
+			? getProxySessionId(params, secretParams)
+			: undefined
+	},
+	additionalClientOptions(params): TLSConnectionOptions {
+		let defaultOptions: TLSConnectionOptions = {
+			applicationLayerProtocols: ['http/1.1']
+		}
+		if('additionalClientOptions' in params) {
+			defaultOptions = {
+				...defaultOptions,
+				...params.additionalClientOptions
+			}
+		}
+
+		return defaultOptions
+	},
+	createRequest(secretParams, params, logger) {
+		if(
+			!secretParams.cookieStr &&
+			!secretParams.authorisationHeader &&
+			!secretParams.headers
+		) {
+			throw new Error('auth parameters are not set')
+		}
+
+		const pubHeaders = params.headers || {}
+		const secHeaders = { ...secretParams.headers }
+		if(secretParams.cookieStr) {
+			secHeaders['Cookie'] = secretParams.cookieStr
+		}
+
+		if(secretParams.authorisationHeader) {
+			secHeaders['Authorization'] = secretParams.authorisationHeader
+		}
+
+		const hasUserAgent = Object.keys(pubHeaders)
+			.some(k => k.toLowerCase() === 'user-agent') ||
+			Object.keys(secHeaders)
+				.some(k => k.toLowerCase() === 'user-agent')
+		if(!hasUserAgent) {
+			//only set user-agent if not set by provider
+			pubHeaders['User-Agent'] = RECLAIM_USER_AGENT
+		}
+
+		const newParams = substituteParamValues(params, secretParams)
+		params = newParams.newParams
+
+		const url = new URL(params.url)
+		const { pathname } = url
+		const searchParams = params.url.includes('?') ? params.url.split('?')[1] : ''
+		logger.info({ url: params.url, path: pathname, query: searchParams.toString() })
+		const body = params.body instanceof Uint8Array
+			? params.body
+			: strToUint8Array(params.body || '')
+		const contentLength = body.length
+		const reqLine = `${params.method} ${pathname}${searchParams?.length ? '?' + searchParams : ''} HTTP/1.1`
+		const secHeadersList = buildHeaders(secHeaders)
+		logger.info({ requestLine: reqLine })
+		const httpReqHeaderStr = [
+			reqLine,
+			`Host: ${getHostHeaderString(url)}`,
+			'Connection: close',
+			`Content-Length: ${contentLength}`,
+			//no compression
+			'Accept-Encoding: identity',
+			...buildHeaders(pubHeaders),
+			...secHeadersList,
+			'\r\n',
+		].join('\r\n')
+		const headerStr = strToUint8Array(httpReqHeaderStr)
+		const data = concatenateUint8Arrays([headerStr, body])
+
+		// hide all secret headers
+		const secHeadersStr = secHeadersList.join('\r\n')
+		const tokenStartIndex
+			= findIndexInUint8Array(data, strToUint8Array(secHeadersStr))
+
+		const redactions = [
+			{
+				fromIndex: tokenStartIndex,
+				toIndex: tokenStartIndex + secHeadersStr.length,
+			}
+		]
+
+		if(newParams.hiddenBodyParts?.length > 0) {
+			for(const hiddenBodyPart of newParams.hiddenBodyParts) {
+				if(hiddenBodyPart.length) {
+					redactions.push({
+						fromIndex: headerStr.length + hiddenBodyPart.index,
+						toIndex: headerStr.length + hiddenBodyPart.index + hiddenBodyPart.length,
+					})
+				}
+			}
+		}
+
+		if(newParams.hiddenURLParts?.length > 0) {
+			for(const hiddenURLPart of newParams.hiddenURLParts) {
+				if(hiddenURLPart.length) {
+					redactions.push({
+						fromIndex: hiddenURLPart.index,
+						toIndex: hiddenURLPart.index + hiddenURLPart.length,
+					})
+				}
+			}
+		}
+
+		redactions.sort((a, b) => a.toIndex - b.toIndex)
+		return {
+			data,
+			redactions: redactions,
+		}
+	},
+	getResponseRedactions({ response, params: rawParams, logger, ctx }) {
+		logger.debug({ response: encodeBase64(response), params: rawParams })
+
+		const res = parseHttpResponse(response)
+		if(!rawParams.responseRedactions?.length) {
+			return []
+		}
+
+		if(((res.statusCode / 100) >> 0) !== 2) {
+			logger.error({ response: encodeBase64(response), params: rawParams })
+			throw new Error(
+				`Expected status 2xx, got ${res.statusCode} (${res.statusMessage})`
+			)
+		}
+
+		const newParams = substituteParamValues(rawParams, undefined, true)
+		const params = newParams.newParams
+
+		const headerEndIndex = res.statusLineEndIndex!
+		const bodyStartIdx = res.bodyStartIndex ?? 0
+		if(bodyStartIdx < 4) {
+			logger.error({ response: encodeBase64(response) })
+			throw new Error('Failed to find response body')
+		}
+
+		const revealFraming = shouldRevealChunkFraming(ctx.version)
+
+		const reveals: RedactedOrHashedArraySlice[] = [
+			{ fromIndex: 0, toIndex: headerEndIndex }
+		]
+
+		//reveal double CRLF which separates headers from body
+		if(shouldRevealCrlf(ctx)) {
+			const crlfs = response
+				.slice(res.headerEndIdx, res.headerEndIdx + 4)
+			if(!areUint8ArraysEqual(crlfs, strToUint8Array('\r\n\r\n'))) {
+				logger.error({ response: encodeBase64(response) })
+				throw new Error(
+					`Failed to find header/body separator at index ${res.headerEndIdx}`
+				)
+			}
+		}
+
+		reveals.push({ fromIndex: res.headerEndIdx, toIndex: res.headerEndIdx + 4 })
+
+		//reveal date header
+		if(res.headerIndices['date']) {
+			reveals.push(res.headerIndices['date'])
+		}
+
+		//reveal content-type so the verifier can decode the response body charset
+		if(res.headerIndices['content-type']) {
+			reveals.push(res.headerIndices['content-type'])
+		}
+
+		//reveal transfer-encoding header so the verifier can dechunk the body
+		if(revealFraming && res.headerIndices['transfer-encoding']) {
+			reveals.push(res.headerIndices['transfer-encoding'])
+		}
+
+		const body = uint8ArrayToBinaryStr(res.body)
+
+		const redactions: RedactedOrHashedArraySlice[] = []
+		for(const rs of params.responseRedactions || []) {
+			const processor = processRedactionRequest(
+				body, rs, bodyStartIdx, res.chunks, revealFraming
+			)
+			for(const { reveal, redactions: reds } of processor) {
+				reveals.push(reveal)
+				redactions.push(...reds)
+			}
+		}
+
+		//reveal all chunk framing (size lines + terminator) so the verifier
+		//can dechunk; chunk data stays redacted unless a redaction reveals it
+		if(revealFraming && res.chunks?.length) {
+			let prev = res.headerEndIdx + 4
+			for(const chunk of res.chunks) {
+				reveals.push({ fromIndex: prev, toIndex: chunk.fromIndex })
+				prev = chunk.toIndex
+			}
+
+			reveals.push({ fromIndex: prev, toIndex: response.length })
+		}
+
+		//reveals can overlap (e.g. a redaction reveal spanning chunk framing),
+		//so redact the complement of their union
+		reveals.sort((a, b) => a.fromIndex - b.fromIndex)
+
+		if(reveals.length > 1) {
+			let currentIndex = 0
+			for(const r of reveals) {
+				if(currentIndex < r.fromIndex) {
+					redactions.push({ fromIndex: currentIndex, toIndex: r.fromIndex })
+				}
+
+				currentIndex = Math.max(currentIndex, r.toIndex)
+			}
+
+			if(currentIndex < response.length) {
+				redactions.push({ fromIndex: currentIndex, toIndex: response.length })
+			}
+		}
+
+		for(const r of reveals) {
+			if(!r.hash) {
+				continue
+			}
+
+			redactions.push(r)
+		}
+
+		redactions.sort((a, b) => a.toIndex - b.toIndex)
+
+		return redactions
+	},
+	assertValidProviderReceipt({ clientVersion, receipt, params: paramsAny, logger, ctx }) {
+		logTranscript()
+		let extractedParams: { [_: string]: string } = {}
+		const secretParams = ('secretParams' in paramsAny)
+			? paramsAny.secretParams as ProviderSecretParams<'http'>
+			: undefined
+		const newParams = substituteParamValues(paramsAny, secretParams, !secretParams)
+		const params = newParams.newParams
+		extractedParams = { ...extractedParams, ...newParams.extractedValues }
+
+		const url = new URL(params.url)
+		const { protocol, pathname } = url
+
+		if(protocol !== 'https:') {
+			logger.error('params URL: %s', params.url)
+			throw new Error(`Expected protocol: https, found: ${protocol}`)
+		}
+
+		const reqBuffer = extractRequestBufferFromTranscript(receipt)
+		if(
+			// 3.1.0 introduced a breaking change for request creation
+			// to prevent smuggling attacks
+			clientVersion >= AttestorVersion.ATTESTOR_VERSION_3_1_0
+			|| getEnvVariable('ALLOW_OLDER_INSECURE_PROOFS') !== '1'
+		) {
+			assertNoSmuggle(reqBuffer, params)
+		}
+
+		const req = getHttpRequestDataFromTranscript(reqBuffer)
+		if(req.method !== params.method.toLowerCase()) {
+			throw new Error(`Invalid method: ${req.method}`)
+		}
+
+		const searchParams = params.url.includes('?') ? params.url.split('?')[1] : ''
+		//brackets in URL path turn into %7B and %7D, so replace them back
+		const expectedPath = pathname.replaceAll('%7B', '{').replaceAll('%7D', '}') + (searchParams?.length ? '?' + searchParams : '')
+		if(!matchRedactedStrings(strToUint8Array(expectedPath), strToUint8Array(req.url))) {
+			logger.error('params URL: %s', params.url)
+			throw new Error(`Expected path: ${expectedPath}, found: ${req.url}`)
+		}
+
+		const expectedHostStr = getHostHeaderString(url)
+		if(req.headers.host !== expectedHostStr) {
+			throw new Error(`Expected host: ${expectedHostStr}, found: ${req.headers.host}`)
+		}
+
+		const connectionHeader = req.headers['connection']
+		if(connectionHeader !== 'close') {
+			throw new Error(`Connection header must be "close", got "${connectionHeader}"`)
+		}
+
+		const allServerBlocks = receipt
+			.filter(s => s.sender === 'server')
+			.map((r) => r.message)
+		// drop leading fully-redacted (handshake) blocks so the response starts
+		// at the status line, but keep redacted body records so chunked byte
+		// alignment is preserved for dechunking
+		const firstRealIdx = allServerBlocks
+			.findIndex(b => !b.every(x => x === REDACTION_CHAR_CODE))
+		const serverBlocks = firstRealIdx === -1
+			? []
+			: allServerBlocks.slice(firstRealIdx)
+		const response = concatArrays(...serverBlocks)
+
+		let bodyStart: number
+		if(shouldRevealCrlf(ctx)) {
+			const responseAfterStatus = response.slice(OK_HTTP_HEADER.length)
+			const separatorIdx = findIndexInUint8Array(
+				responseAfterStatus,
+				strToUint8Array('\r\n\r\n'),
+			)
+			if(separatorIdx === -1) {
+				throw new Error('Response body start not found')
+			}
+
+			bodyStart = OK_HTTP_HEADER.length + separatorIdx + 4
+		} else {
+			bodyStart = OK_HTTP_HEADER.length
+		}
+		const headersText = uint8ArrayToStr(response.slice(0, bodyStart))
+		const okRegex = makeRegex('^HTTP\\/1.1 2\\d{2}')
+		const matchRes = okRegex.exec(headersText)
+		if(!matchRes) {
+			const statusRegex = makeRegex('^HTTP\\/1.1 (\\d{3})')
+			const matchRes = statusRegex.exec(headersText)
+			if(matchRes && matchRes.length > 1) {
+				throw new Error(`Provider returned error ${matchRes[1]}`)
+			}
+
+			let lineEnd = headersText.indexOf('*')
+			if(lineEnd === -1) {
+				lineEnd = headersText.indexOf('\n')
+			}
+
+			if(lineEnd === -1) {
+				lineEnd = OK_HTTP_HEADER.length
+			}
+
+			throw new Error(
+				`Response did not start with \"HTTP/1.1 2XX\" got "${headersText.slice(0, lineEnd)}"`
+			)
+		}
+
+		const paramBody = params.body instanceof Uint8Array
+			? params.body
+			: strToUint8Array(params.body || '')
+
+		if(paramBody.length > 0 && !matchRedactedStrings(paramBody, req.body)) {
+			throw new Error('request body mismatch')
+		}
+
+
+		let body: Uint8Array = response.slice(bodyStart)
+		if(shouldRevealChunkFraming(clientVersion)) {
+			//dechunk the body so matches see contiguous content; redaction
+			//asterisks are preserved as boundaries between revealed slices
+			if(/transfer-encoding:\s*chunked/i.test(headersText)) {
+				body = dechunkResponseBody(body)
+			}
+		}
+
+		const charset = shouldRevealCrlf(ctx)
+			? (ctx.authenticatedResponseCharset ?? getResponseBodyCharset(headersText))
+			: undefined
+		const bodyText = decodeResponseBody(body, charset)
+		let res = headersText + bodyText
+
+		//validate server Date header if present
+		const dateHeader = makeRegex(dateHeaderRegex).exec(res)
+		if(dateHeader && dateHeader.length > 1) {
+			const serverDate = new Date(dateHeader[1])
+			if((Date.now() - serverDate.getTime()) > dateDiff) {
+
+				logger.info({ dateHeader: dateHeader[0], current: Date.now() }, 'date header is off')
+
+				// too many false positives
+				// throw new Error(
+				// 	`Server date is off by "${(Date.now() - serverDate.getTime()) / 1000} s"`
+				// )
+			}
+		}
+
+		if(!shouldRevealChunkFraming(clientVersion) && !secretParams) {
+			//legacy clients redact chunk framing; collapse asterisk runs so
+			//matches can span the redacted framing
+			res = res.slice(bodyStart).replace(/\*{3,}/g, '')
+		}
+
+		for(const { type, value, invert } of params.responseMatches || []) {
+			const inv = Boolean(invert) // explicitly cast to boolean
+
+			switch (type) {
+			case 'regex':
+				const regexRes = makeRegex(value).exec(res)
+				const match = regexRes !== null
+				if(match === inv) { // if both true or both false then fail
+					throw new Error(
+						'Invalid receipt.'
+						+ ` Regex "${value}" ${invert ? 'matched' : 'didn\'t match'}`
+					)
+				}
+
+				if(!match) {
+					continue
+				}
+
+				const groups = regexRes?.groups
+				for(const paramName in groups || []) {
+					if(paramName in extractedParams) {
+						throw new Error(`Duplicate parameter ${paramName}`)
+					}
+
+					const value = groups?.[paramName]
+					if(typeof value !== 'string') {
+						continue
+					}
+
+					extractedParams[paramName] = value
+				}
+
+				break
+			case 'contains':
+				const includes = res.includes(value)
+				if(includes === inv) {
+					throw new Error(
+						`Invalid receipt. Response ${invert ? 'contains' : 'does not contain'} "${value}"`
+					)
+				}
+
+				break
+			default:
+				throw new Error(`Invalid response match type ${type}`)
+			}
+		}
+
+		function concatArrays(...bufs: Uint8Array[]) {
+			const totalSize = bufs.reduce((acc, e) => acc + e.length, 0)
+			const merged = new Uint8Array(totalSize)
+
+			let lenDone = 0
+			for(const array of bufs) {
+				merged.set(array, lenDone)
+				lenDone += array.length
+			}
+
+			return merged
+
+		}
+
+		return { extractedParameters: extractedParams }
+
+		function logTranscript() {
+			const clientMsgs = receipt.filter(s => s.sender === 'client').map(m => m.message)
+			const serverMsgs = receipt.filter(s => s.sender === 'server').map(m => m.message)
+
+			const clientTranscript = encodeBase64(concatenateUint8Arrays(clientMsgs))
+			const serverTranscript = encodeBase64(concatenateUint8Arrays(serverMsgs))
+
+			logger.debug({
+				requestBytes: clientTranscript.length,
+				responseBytes: serverTranscript.length,
+			}, 'http transcript captured')
+		}
+	},
+}
+
+// We need to validate that the request starts correctly, the first two
+// headers must be the host & connection: close header. This ensures that
+// even if another request was made before the one we're reading now, the
+// validation happens against the last one. Prevents a spoof where the claim
+// response was received for another request that we did not expect.
+function assertNoSmuggle(reqBuffer: Uint8Array, params: HTTPProviderParams) {
+	const reqStr = uint8ArrayToBinaryStr(reqBuffer)
+	const expRegex = makeRegex(
+		`^${params.method} (?<path>[^\\s]+) HTTP\\/1\\.1\\r\\n`
+		+ `Host: ${getHostHeaderString(new URL(params.url))}\\r\\n`
+		+ 'Connection: close\\r\\n'
+	)
+	const rslt = expRegex.exec(reqStr)
+	if(!rslt?.groups?.path) {
+		throw new Error(
+			'Method/Host mismatch, or first 2 headers were not Host and Connection'
+		)
+	}
+
+	let redInPathCount = 0
+	for(const char of rslt.groups.path) {
+		if(char === REDACTION_CHAR) {
+			redInPathCount++
+		}
+	}
+
+	if(redInPathCount > MAX_REDACTIONS_IN_PATH) {
+		throw new Error(`Too many redactions in URL path: ${redInPathCount}`)
+	}
+}
+
+// revealing CRLF is a breaking change -- and should only be done
+// if the client's version supports it
+function shouldRevealCrlf({ version }: ProviderCtx) {
+	return version >= AttestorVersion.ATTESTOR_VERSION_2_0_1
+}
+
+// revealing chunk framing (instead of redacting it) + dechunking on the
+// verifier is a breaking change; older clients still redact framing and rely
+// on the asterisk-collapse matching path
+function shouldRevealChunkFraming(version: AttestorVersion) {
+	return version >= AttestorVersion.ATTESTOR_VERSION_3_2_0
+}
+
+// Receipt bodies contain claimant-selected redactions and OPRF replacements.
+// They cannot prove original BOM, declaration precedence, or HTML context.
+// Keep the established header/default policy until document charset selection
+// is independently authenticated against the original response.
+function getResponseBodyCharset(headers: string) {
+	const contentType = /(?:^|[\r\n*])content-type\s*:\s*([^*\r\n]*)/i
+		.exec(headers)?.[1]
+	if(typeof contentType === 'undefined') {
+		return undefined
+	}
+
+	const charsetMatch = /(?:^|;)\s*charset\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))/i
+		.exec(contentType)
+	if(!charsetMatch) {
+		return undefined
+	}
+
+	const charset = charsetMatch[1]?.replace(/\\(.)/g, '$1') ?? charsetMatch[2]
+	return charset.trim() || undefined
+}
+
+function decodeResponseBody(body: Uint8Array, charset: string | undefined) {
+	try {
+		return new TextDecoder(charset ?? 'utf-8').decode(body)
+	} catch(error) {
+		if(charset) {
+			throw new Error(`Unsupported response charset "${charset}"`, { cause: error })
+		}
+
+		throw error
+	}
+}
+
+// dechunk a revealed body by reusing the byte-oriented parser: wrap it in a
+// minimal (already-validated) header block. streamEnded() is skipped to
+// tolerate trailing bytes.
+function dechunkResponseBody(body: Uint8Array) {
+	const parser = makeHttpResponseParser()
+	parser.onChunk(concatenateUint8Arrays([
+		strToUint8Array('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'),
+		body,
+	]))
+	return parser.res.body ?? new Uint8Array()
+}
+
+function getHostPort(params: ProviderParams<'http'>, secretParams: ProviderSecretParams<'http'>) {
+	const { host } = new URL(getURL(params, secretParams))
+	if(!host) {
+		throw new Error('url is incorrect')
+	}
+
+	return host
+}
+
+/**
+ * Obtain the host header string from the URL.
+ * https://stackoverflow.com/a/3364396
+ */
+function getHostHeaderString(url: URL) {
+	const host = url.hostname
+	const port = url.port
+	return port && +port !== DEFAULT_HTTPS_PORT
+		? `${host}:${port}`
+		: host
+
+}
+
+type ReplacedParams = {
+	newParam: string
+	extractedValues: { [_: string]: string }
+	hiddenParts: { index: number, length: number } []
+} | null
+
+type RedactionItem = {
+	reveal: RedactedOrHashedArraySlice
+	redactions: RedactedOrHashedArraySlice[]
+}
+
+const paramsRegex = /{{([^{}]+)}}/sgi
+
+function* processRedactionRequest(
+	body: string,
+	rs: HTTPResponseRedaction,
+	bodyStartIdx: number,
+	resChunks: ArraySlice[] | undefined,
+	revealFraming: boolean,
+): Generator<RedactionItem> {
+	let element = body
+	let elementIdx = 0
+	let elementLength = -1
+
+	if(rs.xPath) {
+		const indexes = extractHTMLElementsIndexes(body, rs.xPath, !!rs.jsonPath)
+		for(const { start, end } of indexes) {
+			element = body.slice(start, end)
+			elementIdx = start
+			elementLength = end - start
+			if(rs.jsonPath) {
+				yield* processJsonPath()
+			} else if(rs.regex) {
+				yield* processRegexp()
+			} else {
+				yield* addRedaction()
+			}
+		}
+	} else if(rs.jsonPath) {
+		yield* processJsonPath()
+	} else if(rs.regex) {
+		yield* processRegexp()
+	} else {
+		throw new Error(
+			'Expected either xPath, jsonPath or regex for redaction'
+		)
+	}
+
+	function* processJsonPath() {
+		const jsonPathIndexes = extractJSONValueIndexes(element, rs.jsonPath!)
+
+		const eIndex = elementIdx
+		for(const ji of jsonPathIndexes) {
+			const jStart = ji.start
+			const jEnd = ji.end
+			element = body.slice(eIndex + jStart, eIndex + jEnd)
+			elementIdx = eIndex + jStart
+			elementLength = jEnd - jStart
+
+			if(rs.regex) {
+				yield* processRegexp()
+			} else {
+				yield* addRedaction()
+			}
+		}
+	}
+
+	function* processRegexp() {
+		logger.debug({
+			element: encodeBase64(strToUint8Array(element)),
+			body: encodeBase64(strToUint8Array(body))
+		})
+		const regexp = makeRegex(rs.regex!)
+		const elem = element || body
+		const match = regexp.exec(elem)
+
+		if(!match?.[0]) {
+			throw new Error(
+				`regexp ${rs.regex} does not match found element '${encodeBase64(strToUint8Array(elem))}'`
+			)
+		}
+
+		elementIdx += match.index
+		elementLength = regexp.lastIndex - match.index
+		element = match[0]
+
+		if(rs.hash && (!match.groups || Object.keys(match.groups).length > 1)) {
+			throw new Error(
+				'Exactly one named capture group is needed per hashed redaction'
+			)
+		}
+
+		// if there are groups in the regex,
+		// we'll only hash the group values
+		if(!rs.hash || !match.groups) {
+			yield* addRedaction()
+			return
+		}
+
+
+		const fullStr = match[0]
+		const grp = Object.values(match.groups)[0]
+		const grpIdx = fullStr.indexOf(grp)
+
+		// don't hash the entire regex, we'll hash the group values
+		elementLength = grpIdx
+		element = fullStr.slice(0, grpIdx)
+		yield* addRedaction(null)
+
+		elementIdx += grpIdx
+		element = grp
+		elementLength = grp.length
+
+		const reveal = getReveal(elementIdx, elementLength, rs.hash)
+		const chunkReds
+			= getRedactionsForChunkHeaders(reveal.fromIndex, reveal.toIndex, resChunks)
+		if(chunkReds.length) {
+			throw new Error(
+				'Hash redactions cannot be performed if '
+				+ 'the redacted string is split between 2'
+				+ ' or more HTTP chunks'
+			)
+		}
+
+		yield { reveal, redactions: chunkReds }
+
+		elementIdx += grp.length
+		element = fullStr.slice(grpIdx + grp.length)
+		elementLength = element.length
+		yield* addRedaction(null)
+	}
+
+	function* addRedaction(
+		hash: RedactedOrHashedArraySlice['hash'] | null = rs.hash,
+	): Generator<RedactionItem> {
+		if(elementIdx < 0 || !elementLength) {
+			return
+		}
+
+		const reveal = getReveal(elementIdx, elementLength, hash || undefined)
+
+		// new clients leave chunk framing revealed (verifier dechunks); older
+		// clients redact the framing inside a reveal that spans chunks
+		const redactions = revealFraming
+			? []
+			: getRedactionsForChunkHeaders(reveal.fromIndex, reveal.toIndex, resChunks)
+		yield { reveal, redactions }
+	}
+
+	function getReveal(
+		startIdx: number,
+		len: number,
+		hash?: RedactedOrHashedArraySlice['hash']
+	) {
+		const from = convertResponsePosToAbsolutePos(
+			startIdx,
+			bodyStartIdx,
+			resChunks
+		)
+		const to = convertResponsePosToAbsolutePos(
+			startIdx + len,
+			bodyStartIdx,
+			resChunks
+		)
+
+		return { fromIndex: from, toIndex: to, hash }
+	}
+}
+
+export function substituteParamValues(
+	currentParams: HTTPProviderParams,
+	secretParams?: ProviderSecretParams<'http'>,
+	ignoreMissingParams?: boolean
+): {
+	newParams: HTTPProviderParams
+	extractedValues: { [_: string]: string }
+	hiddenBodyParts: { index: number, length: number } []
+	hiddenURLParts: { index: number, length: number } []
+} {
+
+	const params = JSON.parse(JSON.stringify(currentParams))
+	let extractedValues: { [_: string]: string } = {}
+
+	const hiddenURLParts: { index: number, length: number } [] = []
+	const urlParams = extractAndReplaceTemplateValues(params.url, ignoreMissingParams)
+	if(urlParams) {
+		params.url = urlParams.newParam
+		extractedValues = { ...urlParams.extractedValues }
+
+		if(urlParams.hiddenParts.length) {
+			const host = getHostHeaderString(new URL(params.url))
+			const offset = `https://${host}`.length - currentParams.method.length - 1 //space between method and start of the path
+			for(const hiddenURLPart of urlParams.hiddenParts) {
+				hiddenURLParts.push({ index: hiddenURLPart.index - offset, length: hiddenURLPart.length })
+			}
+		}
+
+	}
+
+
+	let bodyParams: ReplacedParams
+	let hiddenBodyParts: { index: number, length: number } [] = []
+	if(params.body) {
+		const strBody = typeof params.body === 'string' ? params.body : uint8ArrayToStr(params.body)
+		bodyParams = extractAndReplaceTemplateValues(strBody, ignoreMissingParams)
+		if(bodyParams) {
+			params.body = bodyParams.newParam
+			extractedValues = { ...extractedValues, ...bodyParams.extractedValues }
+			hiddenBodyParts = bodyParams.hiddenParts
+		}
+
+	}
+
+	const geoParams = extractAndReplaceTemplateValues(params.geoLocation)
+	if(geoParams) {
+		params.geoLocation = geoParams.newParam
+		extractedValues = { ...extractedValues, ...geoParams.extractedValues }
+	}
+
+	const proxySessionIdParams = extractAndReplaceTemplateValues(params.proxySessionId)
+	if(proxySessionIdParams) {
+		params.proxySessionId = proxySessionIdParams.newParam
+		extractedValues = { ...extractedValues, ...proxySessionIdParams.extractedValues }
+	}
+
+	if(params.responseRedactions) {
+		for(const r of params.responseRedactions) {
+			if(r.regex) {
+				const regexParams = extractAndReplaceTemplateValues(r.regex)
+				r.regex = regexParams?.newParam
+			}
+
+			if(r.xPath) {
+				const xpathParams = extractAndReplaceTemplateValues(r.xPath)
+				r.xPath = xpathParams?.newParam
+			}
+
+			if(r.jsonPath) {
+				const jsonPathParams = extractAndReplaceTemplateValues(r.jsonPath)
+				r.jsonPath = jsonPathParams?.newParam
+			}
+		}
+	}
+
+	if(params.responseMatches) {
+		for(const r of params.responseMatches) {
+			if(r.value !== '') {
+				const matchParam = extractAndReplaceTemplateValues(r.value)
+				r.value = matchParam?.newParam!
+				extractedValues = { ...extractedValues, ...matchParam?.extractedValues }
+			}
+		}
+	}
+
+	return {
+		newParams: params,
+		extractedValues: extractedValues,
+		hiddenBodyParts: hiddenBodyParts,
+		hiddenURLParts: hiddenURLParts
+	}
+
+	function extractAndReplaceTemplateValues(param: string | undefined, ignoreMissingParams?: boolean): ReplacedParams {
+
+		if(!param) {
+			return null
+		}
+
+		//const paramNames: Set<string> = new Set()
+		const extractedValues: { [_: string]: string } = {}
+		const hiddenParts: { index: number, length: number }[] = []
+
+
+		let totalOffset = 0
+		param = param.replace(paramsRegex, (match, pn, offset) => {
+			if(params.paramValues && pn in params.paramValues) {
+				extractedValues[pn] = params.paramValues[pn]
+				totalOffset += params.paramValues[pn].length - match.length
+				return params.paramValues[pn]
+			} else if(secretParams) {
+				if(secretParams?.paramValues && pn in secretParams?.paramValues) {
+					hiddenParts.push({
+						index: offset + totalOffset,
+						length: secretParams.paramValues[pn].length,
+					})
+					totalOffset += secretParams.paramValues[pn].length - match.length
+					return secretParams.paramValues[pn]
+				} else {
+					throw new Error(`parameter's "${pn}" value not found in paramValues and secret parameter's paramValues`)
+				}
+			} else {
+				if(!(!!ignoreMissingParams)) {
+					throw new Error(`parameter's "${pn}" value not found in paramValues`)
+				} else {
+					return match
+				}
+			}
+		})
+
+		return {
+			newParam: param,
+			extractedValues: extractedValues,
+			hiddenParts: hiddenParts
+		}
+	}
+}
+
+function getGeoLocation(v2Params: HTTPProviderParams, secretParams?: ProviderSecretParams<'http'>) {
+	if(v2Params?.geoLocation) {
+		const paramNames: Set<string> = new Set()
+		let geo = v2Params.geoLocation
+		//extract param names
+
+		let match: RegExpExecArray | null = null
+		while(match = paramsRegex.exec(geo)) {
+			paramNames.add(match[1])
+		}
+
+		for(const pn of paramNames) {
+			if(v2Params.paramValues && pn in v2Params.paramValues) {
+				geo = geo?.replaceAll(`{{${pn}}}`, v2Params.paramValues[pn].toString())
+			} else if(secretParams?.paramValues && pn in secretParams.paramValues) {
+				geo = geo?.replaceAll(`{{${pn}}}`, secretParams.paramValues[pn].toString())
+			} else {
+				throw new Error(`parameter "${pn}" value not found in templateParams`)
+			}
+		}
+
+		const geoRegex = /^[A-Za-z]{2}$/sgiu
+		if(!geoRegex.test(geo)) {
+			throw new Error(`Geolocation ${geo} is invalid`)
+		}
+
+		return geo
+	}
+
+	return undefined
+}
+
+function getProxySessionId(v2Params: HTTPProviderParams, secretParams?: ProviderSecretParams<'http'>) {
+	if(v2Params?.proxySessionId) {
+		const paramNames: Set<string> = new Set()
+		let proxySessionIdValue = v2Params.proxySessionId
+		//extract param names
+
+		let match: RegExpExecArray | null = null
+		while(match = paramsRegex.exec(proxySessionIdValue)) {
+			paramNames.add(match[1])
+		}
+
+		for(const pn of paramNames) {
+			if(v2Params.paramValues && pn in v2Params.paramValues) {
+				proxySessionIdValue = proxySessionIdValue?.replaceAll(`{{${pn}}}`, v2Params.paramValues[pn].toString())
+			} else if(secretParams?.paramValues && pn in secretParams.paramValues) {
+				proxySessionIdValue = proxySessionIdValue?.replaceAll(`{{${pn}}}`, secretParams.paramValues[pn].toString())
+			} else {
+				throw new Error(`parameter "${pn}" value not found in templateParams`)
+			}
+		}
+
+		if(!isValidProxySessionId(proxySessionIdValue)) {
+			throw new Error(`proxySessionId ${proxySessionIdValue} is invalid`)
+		}
+
+		return proxySessionIdValue
+	}
+
+	return undefined
+}
+
+function getURL(v2Params: HTTPProviderParams, secretParams: ProviderSecretParams<'http'>) {
+	let hostPort = v2Params?.url
+	const paramNames: Set<string> = new Set()
+
+	//extract param names
+	let match: RegExpExecArray | null = null
+	while(match = paramsRegex.exec(hostPort)) {
+		paramNames.add(match[1])
+	}
+
+	for(const pn of paramNames) {
+		if(v2Params.paramValues && pn in v2Params.paramValues) {
+			hostPort = hostPort?.replaceAll(`{{${pn}}}`, v2Params.paramValues[pn].toString())
+		} else if(secretParams?.paramValues && pn in secretParams.paramValues) {
+			hostPort = hostPort?.replaceAll(`{{${pn}}}`, secretParams.paramValues[pn].toString())
+		} else {
+			throw new Error(`parameter "${pn}" value not found in templateParams`)
+		}
+	}
+
+	return hostPort
+}
+
+
+export default HTTP_PROVIDER

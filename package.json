@@ -1,0 +1,154 @@
+{
+  "name": "@reclaimprotocol/attestor-core",
+  "version": "5.1.5",
+  "description": "",
+  "type": "module",
+  "imports": {
+    "#src/*.ts": "./src/*.ts",
+    "#src/*.js": "./lib/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reclaimprotocol/attestor-core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./external-rpc": {
+      "types": "./lib/external-rpc/index.d.ts",
+      "default": "./lib/external-rpc/index.js"
+    },
+    "./browser": {
+      "default": "./browser/resources/attestor-browser.min.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && tsc-alias && npm run run:tsc -- src/scripts/build-lib.ts",
+    "build:browser": "sh ./src/scripts/build-browser.sh",
+    "prepack": "npm run download:zk-files && npm run build:browser",
+    "run:tsc": "node --experimental-strip-types",
+    "start": "npm run run:tsc -- src/scripts/start-server.ts",
+    "prepare": "npm run build",
+    "run:test-files": "NODE_ENV=test TZ=utc npm run run:tsc -- --import=#src/tests/mocks.ts --experimental-test-module-mocks --test-force-exit",
+    "test": "npm run run:test-files -- --test src/tests/*.test.ts",
+    "test:avs": "NODE_ENV=test TZ=utc jest --verbose --forceExit --detectOpenHandles --test-match **/src/avs/tests/test.*.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "generate:proto": "sh ./src/scripts/generate-proto.sh",
+    "generate:contracts-data": "sh ./src/scripts/contract-data-gen.sh",
+    "generate:provider-types": "npm run run:tsc -- src/scripts/generate-provider-types.ts",
+    "verify:root-ca": "npm run run:tsc -- src/scripts/verify-root-ca.ts",
+    "create:claim": "npm run run:tsc -- src/scripts/generate-receipt.ts",
+    "build-contracts": "cd avs/contracts && forge build",
+    "deploy:contracts": "sh avs/utils/anvil/deploy-all-to-anvil-and-save-state.sh",
+    "deploy:contracts-to-chain": "sh avs/utils/anvil/deploy-to-chain.sh",
+    "register:avs-operator": "npm run run:tsc -- src/scripts/register-avs-operator.ts",
+    "check:avs-registration": "npm run run:tsc -- src/scripts/check-avs-registration.ts",
+    "whitelist:operator": "npm run run:tsc -- src/scripts/whitelist-operator.ts",
+    "update:avs-metadata": "npm run run:tsc -- src/scripts/update-avs-metadata.ts",
+    "generate:avs": "typechain --target ethers-v6 --out-dir src/avs/contracts avs/contracts/out/ReclaimServiceManager.sol/*.json",
+    "start:chain": "bash ./avs/utils/anvil/start-anvil-chain-with-el-and-avs-deployed.sh",
+    "commitlint": "commitlint --edit",
+    "download:zk-files": "node node_modules/@reclaimprotocol/zk-symmetric-crypto/lib/scripts/download-files",
+    "generate:toprf-keys": "npm run run:tsc -- src/scripts/generate-toprf-keys.ts"
+  },
+  "files": [
+    "lib/*",
+    "browser/resources/attestor-browser.min.mjs"
+  ],
+  "keywords": [
+    "reclaim-protocol",
+    "attestor",
+    "blockchain",
+    "ethereum",
+    "zero-knowledge-proofs",
+    "circom",
+    "tls",
+    "cryptography",
+    "web3",
+    "decentralized-identity",
+    "data-verification",
+    "smart-contracts",
+    "typescript",
+    "nodejs",
+    "protobuf",
+    "snarkjs",
+    "ethers-js",
+    "zk-symmetric-crypto"
+  ],
+  "bugs": {
+    "url": "https://github.com/reclaimprotocol/attestor-core/issues"
+  },
+  "homepage": "https://github.com/reclaimprotocol/attestor-core",
+  "author": "Adhiraj Singh",
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.11.0",
+    "@peculiar/asn1-x509": "^2.6.1",
+    "@peculiar/webcrypto": "^1.5.0",
+    "@peculiar/x509": "^1.14.3",
+    "@reclaimprotocol/tls": "^0.1.4",
+    "@reclaimprotocol/zk-symmetric-crypto": "5.1.7",
+    "ajv": "^8.18.0",
+    "bs58": "^6.0.0",
+    "canonicalize": "^2.1.0",
+    "dotenv": "^16.6.1",
+    "elastic-apm-node": "^4.18.0",
+    "esprima-next": "^5.8.4",
+    "ethers": "^6.17.0",
+    "https-proxy-agent": "^7.0.6",
+    "ip-address": "^10.7.3",
+    "jsonpath-plus": "^10.4.0",
+    "koffi": "^2.15.2",
+    "p-queue": "^8.1.1",
+    "parse5": "^8.0.0",
+    "parse5-htmlparser2-tree-adapter": "^8.0.0",
+    "pino": "^9.14.0",
+    "serve-static": "^1.16.3",
+    "snarkjs": "^0.7.6",
+    "ws": "^8.21.0",
+    "xpath": "^0.0.34"
+  },
+  "optionalDependencies": {
+    "re2": "*"
+  },
+  "devDependencies": {
+    "@adiwajshing/eslint-config": "github:adiwajshing/eslint-config",
+    "@commitlint/cli": "^17.8.1",
+    "@commitlint/config-conventional": "^17.8.1",
+    "@kayahr/text-encoding": "^2.1.0",
+    "@typechain/ethers-v6": "^0.5.1",
+    "@types/chance": "^1.1.7",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.19.15",
+    "@types/serve-static": "^1.15.10",
+    "@types/ws": "^8.18.1",
+    "chance": "^1.1.13",
+    "esbuild": "^0.25.12",
+    "eslint": "^9.39.4",
+    "eslint-plugin-no-relative-import-paths": "^1.6.1",
+    "event-target-shim": "^6.0.2",
+    "json-schema-to-typescript": "^15.0.4",
+    "re2": "^1.24.0",
+    "ts-jest": "^29.4.6",
+    "ts-proto": "^2.11.6",
+    "tsc-alias": "^1.8.17",
+    "typechain": "^8.3.2",
+    "typescript": "^5.9.3",
+    "whatwg-url": "^14.2.0",
+    "yaml": "^2.8.3"
+  },
+  "overrides": {
+    "elliptic": "^6.6.1",
+    "underscore": "^1.13.8",
+    "fast-uri": "^3.1.8",
+    "filelist": {
+      "brace-expansion": "^2.1.7"
+    }
+  }
+}

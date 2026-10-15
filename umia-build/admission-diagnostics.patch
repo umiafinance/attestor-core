@@ -1,0 +1,1325 @@
+diff --git a/src/config/claim-chain-ids.ts b/src/config/claim-chain-ids.ts
+new file mode 100644
+index 0000000..26920c6
+--- /dev/null
++++ b/src/config/claim-chain-ids.ts
+@@ -0,0 +1,16 @@
++import { CHAIN_ID } from '#src/utils/chain-id.ts'
++
++/** Chains whose auction and sandbox context messages this server signs; CLAIM_EPOCH must be registered on each. */
++export function parseClaimChainIds(raw: string | undefined): readonly string[] {
++	const ids = raw === undefined ? [] : raw.split(',')
++	const canonical = ids.length > 0 && ids.every((id, index) => CHAIN_ID.test(id)
++		&& Number.isSafeInteger(Number(id))
++		&& (index === 0 || Number(ids[index - 1]) < Number(id)))
++	if(!canonical) {
++		throw new Error('CLAIM_CHAIN_IDS must be strictly ascending comma-separated canonical decimal chain IDs')
++	}
++
++	return Object.freeze(ids)
++}
++
++export const CLAIM_CHAIN_IDS = parseClaimChainIds(process.env.CLAIM_CHAIN_IDS)
+diff --git a/src/scripts/start-server.ts b/src/scripts/start-server.ts
+index d09e61f..894ee24 100644
+--- a/src/scripts/start-server.ts
++++ b/src/scripts/start-server.ts
+@@ -1,4 +1,5 @@
+ import '#src/config/claim-epoch.ts'
++import '#src/config/claim-chain-ids.ts'
+ import '#src/server/utils/config-env.ts'
+ 
+ import { setCryptoImplementation } from '@reclaimprotocol/tls'
+diff --git a/src/server/handlers/claimTeeBundle.ts b/src/server/handlers/claimTeeBundle.ts
+index 4d2b684..62a63f5 100644
+--- a/src/server/handlers/claimTeeBundle.ts
++++ b/src/server/handlers/claimTeeBundle.ts
+@@ -1,7 +1,7 @@
+ import type { RPCHandler } from '#src/types/index.ts'
+-import { AttestorError } from '#src/utils/error.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+ // Signed TEE outputs do not bind the raw destination host, port, or SNI.
+ export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async() => {
+-	throw AttestorError.badRequest('TEE claims require verified endpoint binding')
++	throw rejection('ERROR_BAD_REQUEST', 'TEE_CLAIMS_DISABLED', 'TEE claims require verified endpoint binding')
+ }
+diff --git a/src/server/handlers/claimTunnel.ts b/src/server/handlers/claimTunnel.ts
+index f8d613b..21fcd3a 100644
+--- a/src/server/handlers/claimTunnel.ts
++++ b/src/server/handlers/claimTunnel.ts
+@@ -1,3 +1,4 @@
++import { CLAIM_CHAIN_IDS } from '#src/config/claim-chain-ids.ts'
+ import { CLAIM_EPOCH } from '#src/config/claim-epoch.ts'
+ import { MAX_CLAIM_TIMESTAMP_DIFF_S } from '#src/config/index.ts'
+ import { ClaimTunnelResponse } from '#src/proto/api.ts'
+@@ -12,6 +13,7 @@ import {
+ 	getIdentifierFromClaimInfo,
+ 	unixTimestampSeconds
+ } from '#src/utils/index.ts'
++import { rejection, withRejectionReason } from '#src/utils/rejection-reason.ts'
+ 
+ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 	claimRequest,
+@@ -48,13 +50,17 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 		|| tunnel.createRequest?.geoLocation !== request?.geoLocation
+ 		|| tunnel.createRequest?.proxySessionId !== request?.proxySessionId
+ 	) {
+-		throw AttestorError.badRequest('Tunnel request does not match')
++		throw rejection('ERROR_BAD_REQUEST', 'TUNNEL_REQUEST_MISMATCH', 'Tunnel request does not match')
+ 	}
+ 
+-	assertTranscriptsMatch(claimRequest.transcript, tunnel.transcript)
++	try {
++		assertTranscriptsMatch(claimRequest.transcript, tunnel.transcript)
++	} catch(err) {
++		throw withRejectionReason(err, 'TRANSCRIPT_MISMATCH', 'ERROR_BAD_REQUEST')
++	}
+ 	let inputContext: ReturnType<typeof assertSupportedInputContext>
+ 	try {
+-		inputContext = assertSupportedInputContext(claimRequest.data?.context, client.authIdentity)
++		inputContext = assertSupportedInputContext(claimRequest.data?.context, client.authIdentity, CLAIM_CHAIN_IDS)
+ 	} catch(err) {
+ 		client.removeTunnel(request.id)
+ 		throw err
+@@ -64,8 +70,9 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 	try {
+ 		const now = unixTimestampSeconds()
+ 		if(Math.floor(timestampS! - now) > MAX_CLAIM_TIMESTAMP_DIFF_S) {
+-			throw new AttestorError(
++			throw rejection(
+ 				'ERROR_INVALID_CLAIM',
++				'CLAIM_TIMESTAMP_SKEW',
+ 				`Timestamp provided ${timestampS} is too far off. Current time is ${now}`
+ 			)
+ 		}
+diff --git a/src/server/handlers/createTunnel.ts b/src/server/handlers/createTunnel.ts
+index 633ca1e..502d311 100644
+--- a/src/server/handlers/createTunnel.ts
++++ b/src/server/handlers/createTunnel.ts
+@@ -5,19 +5,20 @@ import { assertAuthenticatedTunnelHost } from '#src/server/utils/host-policy.ts'
+ import type { RPCHandler, Tunnel } from '#src/types/index.ts'
+ import { AttestorError } from '#src/utils/index.ts'
+ import { safeErrorCode } from '#src/utils/logger.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 	{ id, ...opts },
+ 	{ tx, logger, client }
+ ) => {
+ 	if(client.tunnels[id]) {
+-		throw AttestorError.badRequest(`Tunnel "${id}" already exists`)
++		throw rejection('ERROR_BAD_REQUEST', 'TUNNEL_ID_IN_USE', `Tunnel "${id}" already exists`)
+ 	}
+ 
+ 	const allowedHosts = client.authHostWhitelist
+ 	// Without AUTHENTICATION_PUBLIC_KEY, init admits sessions that have no host policy.
+ 	if(allowedHosts === undefined) {
+-		throw new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Tunnels require an authenticated session')
++		throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_REQUIRED', 'Tunnels require an authenticated session')
+ 	}
+ 
+ 	assertAuthenticatedTunnelHost(allowedHosts, opts.host, opts.port)
+diff --git a/src/server/handlers/init.ts b/src/server/handlers/init.ts
+index f426e13..bc3727b 100644
+--- a/src/server/handlers/init.ts
++++ b/src/server/handlers/init.ts
+@@ -5,6 +5,7 @@ import type { RPCHandler } from '#src/types/index.ts'
+ import { assertValidAuthRequest } from '#src/utils/auth.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { AttestorError } from '#src/utils/index.ts'
++import { createVerifiedSessionRef } from '#src/utils/logger.ts'
+ import { SIGNATURES } from '#src/utils/signatures/index.ts'
+ 
+ const TOPRF_PUBLIC_KEY = getEnvVariable('TOPRF_PUBLIC_KEY')
+@@ -28,12 +29,13 @@ export const init: RPCHandler<'init'> = async(
+ 	await assertValidAuthRequest(initRequest.auth, initRequest.signatureType)
+ 
+ 	if(initRequest.auth?.data) {
++		client.setAuthSession(initRequest.auth.data)
++		// Verified above, so the auth ID (the Umia zkTLS session ID) may correlate this hop's logs.
+ 		client.logger = client.logger.child({
+-			userId: initRequest.auth.data.id
++			zktlsSessionId: createVerifiedSessionRef(initRequest.auth.data.id)
+ 		})
++		client.logger.info('auth session established')
+ 	}
+-
+-	if(initRequest.auth?.data) client.setAuthSession(initRequest.auth.data)
+ 	client.metadata = initRequest
+ 	client.isInitialised = true
+ 
+diff --git a/src/server/socket.ts b/src/server/socket.ts
+index a88f471..f7f042e 100644
+--- a/src/server/socket.ts
++++ b/src/server/socket.ts
+@@ -14,6 +14,7 @@ import type { AcceptNewConnectionOpts, BGPListener, IAttestorServerSocket, Logge
+ import { AttestorError, generateSessionId } from '#src/utils/index.ts'
+ import { AttestorSocket } from '#src/utils/socket-base.ts'
+ import { createServerLogRef, safeErrorCode, safeHandler, safeRpcStage } from '#src/utils/logger.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+ export class AttestorServerSocket extends AttestorSocket implements IAttestorServerSocket {
+ 
+@@ -117,10 +118,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 	getTunnel(tunnelId: number) {
+ 		const tunnel = this.tunnels[tunnelId]
+ 		if(!tunnel) {
+-			throw new AttestorError(
+-				'ERROR_NOT_FOUND',
+-				`Tunnel "${tunnelId}" not found`
+-			)
++			throw rejection('ERROR_NOT_FOUND', 'TUNNEL_NOT_FOUND', `Tunnel "${tunnelId}" not found`)
+ 		}
+ 
+ 		return tunnel
+diff --git a/src/server/tunnels/make-tcp-tunnel.ts b/src/server/tunnels/make-tcp-tunnel.ts
+index 873094f..3046acc 100644
+--- a/src/server/tunnels/make-tcp-tunnel.ts
++++ b/src/server/tunnels/make-tcp-tunnel.ts
+@@ -11,6 +11,7 @@ import type { Logger } from '#src/types/index.ts'
+ import type { MakeTunnelFn, TCPSocketProperties } from '#src/types/index.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { AttestorError } from '#src/utils/index.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+ const HTTPS_PROXY_URL = getEnvVariable('HTTPS_PROXY_URL')
+ // allow these hosts to be directed w/o any IP resolution checks,
+@@ -158,7 +159,7 @@ async function connectTcp({ host, port, geoLocation, proxySessionId, logger }: E
+ async function getSocket(opts: ExtraOpts) {
+ 	const { logger, geoLocation } = opts
+ 	if((geoLocation || opts.proxySessionId) && !HTTPS_PROXY_URL) {
+-		throw AttestorError.badRequest('Geolocation or proxy session requires HTTPS_PROXY_URL')
++		throw rejection('ERROR_BAD_REQUEST', 'PROXY_NOT_CONFIGURED', 'Geolocation or proxy session requires HTTPS_PROXY_URL')
+ 	}
+ 	if(geoLocation) {
+ 		try {
+diff --git a/src/server/utils/assert-valid-claim-request.ts b/src/server/utils/assert-valid-claim-request.ts
+index 6beabf3..f5b7625 100644
+--- a/src/server/utils/assert-valid-claim-request.ts
++++ b/src/server/utils/assert-valid-claim-request.ts
+@@ -33,6 +33,7 @@ import {
+ 	SIGNATURES,
+ 	verifyZkPacket
+ } from '#src/utils/index.ts'
++import { rejection, withRejectionReason } from '#src/utils/rejection-reason.ts'
+ import { getEngineString } from '#src/utils/zk.ts'
+ 
+ /**
+@@ -61,17 +62,11 @@ export async function assertValidClaimRequest(
+ 		fixedClientIV
+ 	} = request
+ 	if(!data) {
+-		throw new AttestorError(
+-			'ERROR_INVALID_CLAIM',
+-			'No info provided on claim request'
+-		)
++		throw rejection('ERROR_INVALID_CLAIM', 'CLAIM_REQUEST_INVALID', 'No info provided on claim request')
+ 	}
+ 
+ 	if(!requestSignature?.length) {
+-		throw new AttestorError(
+-			'ERROR_INVALID_CLAIM',
+-			'No signature provided on claim request'
+-		)
++		throw rejection('ERROR_INVALID_CLAIM', 'CLAIM_SIGNATURE_INVALID', 'No signature provided on claim request')
+ 	}
+ 
+ 	// verify request signature
+@@ -81,36 +76,45 @@ export async function assertValidClaimRequest(
+ 	const { verify: verifySig } = SIGNATURES[metadata.signatureType]
+ 	const verified = await verifySig(serialisedReq, requestSignature, data.owner)
+ 	if(!verified) {
+-		throw new AttestorError(
+-			'ERROR_INVALID_CLAIM',
+-			'Invalid signature on claim request'
+-		)
++		throw rejection('ERROR_INVALID_CLAIM', 'CLAIM_SIGNATURE_INVALID', 'Invalid signature on claim request')
+ 	}
+ 
+-	const receipt = await decryptTranscript(
+-		request.transcript,
+-		logger,
+-		getEngineString(zkEngine),
+-		fixedServerIV,
+-		fixedClientIV
+-	)
++	let receipt: Awaited<ReturnType<typeof decryptTranscript>>
++	try {
++		receipt = await decryptTranscript(
++			request.transcript,
++			logger,
++			getEngineString(zkEngine),
++			fixedServerIV,
++			fixedClientIV
++		)
++	} catch(err) {
++		throw withRejectionReason(err, 'TRANSCRIPT_DECRYPT_FAILED')
++	}
+ 	const reqHost = request.request?.host
+ 	if(receipt.hostname !== reqHost) {
+-		throw new Error(
++		throw rejection(
++			'ERROR_INVALID_CLAIM',
++			'TLS_HOST_MISMATCH',
+ 			`Expected server name ${reqHost}, got ${receipt.hostname}`
+ 		)
+ 	}
+ 
+ 	// get all application data messages
+ 	const applData = extractApplicationDataFromTranscript(receipt)
+-	const newData = await assertValidProviderTranscript(
+-		applData,
+-		metadata,
+-		data,
+-		logger,
+-		{ version: metadata.clientVersion },
+-		receipt.oprfRawReplacements
+-	)
++	let newData: typeof data
++	try {
++		newData = await assertValidProviderTranscript(
++			applData,
++			metadata,
++			data,
++			logger,
++			{ version: metadata.clientVersion },
++			receipt.oprfRawReplacements
++		)
++	} catch(err) {
++		throw withRejectionReason(err, 'PROVIDER_VALIDATION_FAILED')
++	}
+ 	if(newData !== data) {
+ 		logger.info({ newData }, 'updated claim info')
+ 	}
+@@ -158,7 +162,11 @@ export async function assertValidProviderTranscript<T extends ProviderClaimInfo>
+ 		)
+ 	}
+ 
+-	assertValidateProviderParams(providerName, params)
++	try {
++		assertValidateProviderParams(providerName, params)
++	} catch(err) {
++		throw withRejectionReason(err, 'PROVIDER_PARAMS_INVALID', 'ERROR_BAD_REQUEST')
++	}
+ 
+ 	const rslt = await provider.assertValidProviderReceipt({
+ 		clientVersion: metadata.clientVersion,
+diff --git a/src/server/utils/auth-session.ts b/src/server/utils/auth-session.ts
+index 72f8884..6473742 100644
+--- a/src/server/utils/auth-session.ts
++++ b/src/server/utils/auth-session.ts
+@@ -1,5 +1,5 @@
+ import type { AuthenticatedUserData } from '#src/proto/api.ts'
+-import { AttestorError } from '#src/utils/error.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+ type Timer = ReturnType<typeof setTimeout>
+ export type AuthClock = {
+@@ -16,7 +16,7 @@ const SYSTEM_CLOCK: AuthClock = {
+ const MAX_TIMEOUT_MS = 2_147_483_647
+ 
+ export function authExpiredError() {
+-	return new AttestorError('ERROR_AUTHENTICATION_FAILED', 'Authentication expired')
++	return rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_EXPIRED', 'Authentication expired')
+ }
+ 
+ export class AuthSession {
+diff --git a/src/server/utils/claim-context-policy.ts b/src/server/utils/claim-context-policy.ts
+index e8e59ae..d11a550 100644
+--- a/src/server/utils/claim-context-policy.ts
++++ b/src/server/utils/claim-context-policy.ts
+@@ -1,5 +1,7 @@
++import { CHAIN_ID } from '#src/utils/chain-id.ts'
+ import { canonicalStringify } from '#src/utils/claims.ts'
+ import { AttestorError } from '#src/utils/error.ts'
++import type { RejectionReason } from '#src/utils/rejection-reason.ts'
+ 
+ const INPUT_KEYS = ['contextAddress', 'contextMessage', 'reclaimSessionId']
+ const SIGNED_KEYS = [...INPUT_KEYS, 'providerHash', 'extractedParameters']
+@@ -17,83 +19,88 @@ type InputContext = {
+ 	reclaimSessionId: string
+ }
+ 
+-function invalid(): never {
+-	throw AttestorError.badRequest('Unsupported claim context')
++// The runner adapter matches this exact message; the reason carries the finite detail.
++function invalid(reason: RejectionReason): never {
++	throw AttestorError.badRequest('Unsupported claim context', { reason })
+ }
+ 
+-function parseCanonicalObject(raw: unknown, keys: readonly string[]): Record<string, unknown> {
+-	if(typeof raw !== 'string') return invalid()
++function parseCanonicalObject(raw: unknown, keys: readonly string[], reason: RejectionReason): Record<string, unknown> {
++	if(typeof raw !== 'string') return invalid(reason)
+ 	let value: unknown
+ 	try {
+ 		value = JSON.parse(raw)
+ 	} catch {
+-		return invalid()
++		return invalid(reason)
+ 	}
+-	if(!value || typeof value !== 'object' || Array.isArray(value)) return invalid()
++	if(!value || typeof value !== 'object' || Array.isArray(value)) return invalid(reason)
+ 	const context = value as Record<string, unknown>
+ 	const actualKeys = Object.keys(context)
+-	if(actualKeys.length !== keys.length || actualKeys.some(key => !keys.includes(key))) return invalid()
++	if(actualKeys.length !== keys.length || actualKeys.some(key => !keys.includes(key))) return invalid(reason)
+ 	// A canonical byte comparison also rejects duplicate raw JSON keys before signing.
+-	if(canonicalStringify(context) !== raw) return invalid()
++	if(canonicalStringify(context) !== raw) return invalid(reason)
+ 	return context
+ }
+ 
+-function assertAuctionMessage(value: unknown): asserts value is string {
+-	if(typeof value !== 'string' || !MESSAGE.test(value)) return invalid()
+-	const parts = value.split(':')
+-	if(parts[1] !== '10143' || !ADDRESS.test(parts[2] ?? '')) return invalid()
+-	if(parts[0] === 'register' && parts.length === 4 && parts[3]) return
+-	if(parts[0] === 'bid' && parts.length === 6
+-		&& DECIMAL.test(parts[3]) && DECIMAL.test(parts[4]) && parts[5]) return
+-	return invalid()
+-}
++type ContextMessageForm = { kind: 'register' | 'bid' | 'sandbox', chainId: string }
+ 
+-// Generation-only sandbox challenge bound to the session wallet. The hook only accepts
+-// register:/bid: prefixes, so a sandbox claim can never satisfy an auction.
+-export function isSandboxContextMessage(value: unknown, contextAddress: string): value is string {
+-	if(typeof value !== 'string') return false
+-	const parts = value.split(':')
+-	return parts.length === 4 && parts[0] === 'sandbox' && parts[1] === '10143'
+-		&& parts[2] === contextAddress && UUID_V4.test(parts[3])
++/** Parses the three accepted message forms before the instance's chain scope applies. */
++function parseContextMessage(value: unknown, contextAddress: string): ContextMessageForm | undefined {
++	if(typeof value !== 'string' || !MESSAGE.test(value)) return undefined
++	const [kind, chainId = '', address = '', ...rest] = value.split(':')
++	if(!CHAIN_ID.test(chainId) || !ADDRESS.test(address)) return undefined
++	if(kind === 'register' && rest.length === 1 && rest[0]) return { kind, chainId }
++	if(kind === 'bid' && rest.length === 3
++		&& DECIMAL.test(rest[0]) && DECIMAL.test(rest[1]) && rest[2]) return { kind, chainId }
++	// Generation-only sandbox challenge bound to the session wallet. The hook only accepts
++	// register:/bid: prefixes, so a sandbox claim can never satisfy an auction.
++	if(kind === 'sandbox' && rest.length === 1
++		&& address === contextAddress && UUID_V4.test(rest[0])) return { kind, chainId }
++	return undefined
+ }
+ 
+-export function assertSupportedInputContext(raw: unknown, authIdentity: string | undefined): InputContext {
+-	const input = parseCanonicalObject(raw, INPUT_KEYS)
+-	if(typeof input.contextAddress !== 'string' || !ADDRESS.test(input.contextAddress)) return invalid()
+-	if(!isSandboxContextMessage(input.contextMessage, input.contextAddress)) {
+-		assertAuctionMessage(input.contextMessage)
++export function assertSupportedInputContext(
++	raw: unknown,
++	authIdentity: string | undefined,
++	chainIds: readonly string[]
++): InputContext {
++	const input = parseCanonicalObject(raw, INPUT_KEYS, 'CLAIM_CONTEXT_INVALID')
++	if(typeof input.contextAddress !== 'string' || !ADDRESS.test(input.contextAddress)) {
++		return invalid('CLAIM_CONTEXT_INVALID')
+ 	}
+-	if(!authIdentity || input.reclaimSessionId !== authIdentity) return invalid()
++	const form = parseContextMessage(input.contextMessage, input.contextAddress)
++	if(!form) return invalid('CLAIM_CONTEXT_MESSAGE_UNSUPPORTED')
++	if(!chainIds.includes(form.chainId)) return invalid('CLAIM_CONTEXT_CHAIN_NOT_ALLOWED')
++	if(!authIdentity || input.reclaimSessionId !== authIdentity) return invalid('CLAIM_CONTEXT_SESSION_MISMATCH')
+ 	return {
+ 		contextAddress: input.contextAddress,
+-		contextMessage: input.contextMessage,
++		contextMessage: input.contextMessage as string,
+ 		reclaimSessionId: authIdentity
+ 	}
+ }
+ 
+ export function assertSupportedSignedContext(raw: unknown, input: InputContext): void {
+-	if(typeof raw !== 'string') return invalid()
+-	const signed = parseCanonicalObject(raw, SIGNED_KEYS)
++	if(typeof raw !== 'string') return invalid('SIGNED_CONTEXT_INVALID')
++	const signed = parseCanonicalObject(raw, SIGNED_KEYS, 'SIGNED_CONTEXT_INVALID')
+ 	for(const key of INPUT_KEYS) {
+-		if(signed[key] !== input[key]) return invalid()
++		if(signed[key] !== input[key]) return invalid('SIGNED_CONTEXT_INVALID')
+ 	}
+-	if(typeof signed.providerHash !== 'string' || !HASH.test(signed.providerHash)) return invalid()
++	if(typeof signed.providerHash !== 'string' || !HASH.test(signed.providerHash)) return invalid('SIGNED_CONTEXT_INVALID')
+ 	const extracted = signed.extractedParameters
+-	if(!extracted || typeof extracted !== 'object' || Array.isArray(extracted)) return invalid()
++	if(!extracted || typeof extracted !== 'object' || Array.isArray(extracted)) return invalid('SIGNED_CONTEXT_INVALID')
+ 	const entries = Object.entries(extracted)
+ 	if(!entries.length || entries.some(([key, value]) =>
+ 		!EXTRACTED_KEY.test(key) || RESERVED_EXTRACTED_KEYS.has(key)
+-		|| typeof value !== 'string' || !value.trim().length)) return invalid()
++		|| typeof value !== 'string' || !value.trim().length)) return invalid('SIGNED_CONTEXT_INVALID')
+ 
+ 	// Claims.sol reads the first raw target, so each must identify this top-level value.
+ 	for(const key of ['contextAddress', 'contextMessage', 'providerHash'] as const) {
+ 		const target = `"${key}":"`
+-		if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid()
++		if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid('SIGNED_CONTEXT_INVALID')
+ 		const start = raw.indexOf(target) + target.length
+-		if(start < target.length || raw.slice(start, raw.indexOf('"', start)) !== signed[key]) return invalid()
++		if(start < target.length || raw.slice(start, raw.indexOf('"', start)) !== signed[key]) return invalid('SIGNED_CONTEXT_INVALID')
+ 	}
+ 	const target = '"extractedParameters":'
+-	if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid()
++	if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid('SIGNED_CONTEXT_INVALID')
+ 	const start = raw.indexOf(target) + target.length
+-	if(start < target.length || !raw.startsWith(canonicalStringify(extracted), start)) return invalid()
++	if(start < target.length || !raw.startsWith(canonicalStringify(extracted), start)) return invalid('SIGNED_CONTEXT_INVALID')
+ }
+diff --git a/src/server/utils/host-policy.ts b/src/server/utils/host-policy.ts
+index 7953a55..43c966e 100644
+--- a/src/server/utils/host-policy.ts
++++ b/src/server/utils/host-policy.ts
+@@ -2,7 +2,7 @@ import { isIP } from 'node:net'
+ 
+ import type { ProviderClaimInfo } from '#src/proto/api.ts'
+ import { canonicalStringify } from '#src/utils/claims.ts'
+-import { AttestorError } from '#src/utils/error.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+ const MAX_DNS_NAME_LENGTH = 253
+ const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+@@ -22,12 +22,12 @@ export function isCanonicalAuthHostname(host: unknown): host is string {
+ 
+ export function assertCanonicalHostWhitelist(hostWhitelist: readonly string[]) {
+ 	if(!Array.isArray(hostWhitelist) || !hostWhitelist.length) {
+-		throw AttestorError.badRequest('Authenticated host list is empty')
++		throw rejection('ERROR_BAD_REQUEST', 'HOST_LIST_INVALID', 'Authenticated host list is empty')
+ 	}
+ 	let previous: string | undefined
+ 	for(const entry of hostWhitelist) {
+ 		if(!isCanonicalAuthHostname(entry) || (previous !== undefined && previous >= entry)) {
+-			throw AttestorError.badRequest('Authenticated host list is not canonical')
++			throw rejection('ERROR_BAD_REQUEST', 'HOST_LIST_INVALID', 'Authenticated host list is not canonical')
+ 		}
+ 		previous = entry
+ 	}
+@@ -39,8 +39,8 @@ export function assertAuthenticatedTunnelHost(
+ 	port: number
+ ) {
+ 	assertCanonicalHostWhitelist(hostWhitelist)
+-	if(port !== 443) throw AttestorError.badRequest('Authenticated tunnel requires port 443')
+-	if(!hostWhitelist.includes(host)) throw AttestorError.badRequest('Host not allowed by auth request')
++	if(port !== 443) throw rejection('ERROR_BAD_REQUEST', 'PORT_NOT_ALLOWED', 'Authenticated tunnel requires port 443')
++	if(!hostWhitelist.includes(host)) throw rejection('ERROR_BAD_REQUEST', 'HOST_NOT_ALLOWED', 'Host not allowed by auth request')
+ }
+ 
+ export function assertAuthenticatedClaimAuthority(
+@@ -50,40 +50,40 @@ export function assertAuthenticatedClaimAuthority(
+ 	tunnelPort: number | undefined
+ ) {
+ 	if(!tunnelHost || tunnelPort === undefined) {
+-		throw AttestorError.badRequest('Authenticated claim has no recorded tunnel authority')
++		throw rejection('ERROR_BAD_REQUEST', 'TUNNEL_REQUEST_MISMATCH', 'Authenticated claim has no recorded tunnel authority')
+ 	}
+ 	assertAuthenticatedTunnelHost(hostWhitelist, tunnelHost, tunnelPort)
+ 	if(claim.provider !== 'http') {
+-		throw AttestorError.badRequest('Authenticated claim provider is unsupported')
++		throw rejection('ERROR_BAD_REQUEST', 'CLAIM_PROVIDER_UNSUPPORTED', 'Authenticated claim provider is unsupported')
+ 	}
+ 
+ 	let params: unknown
+ 	try {
+ 		params = JSON.parse(claim.parameters)
+ 	} catch {
+-		throw AttestorError.badRequest('Authenticated claim URL is invalid')
++		throw rejection('ERROR_BAD_REQUEST', 'CLAIM_PARAMS_INVALID', 'Authenticated claim URL is invalid')
+ 	}
+ 	if(!params || typeof params !== 'object' || Array.isArray(params)
+ 		|| canonicalStringify(params) !== claim.parameters) {
+-		throw AttestorError.badRequest('Authenticated claim parameters are not canonical')
++		throw rejection('ERROR_BAD_REQUEST', 'CLAIM_PARAMS_INVALID', 'Authenticated claim parameters are not canonical')
+ 	}
+ 	const urlText = (params as { url?: unknown }).url
+ 	if(typeof urlText !== 'string') {
+-		throw AttestorError.badRequest('Authenticated claim URL is invalid')
++		throw rejection('ERROR_BAD_REQUEST', 'CLAIM_PARAMS_INVALID', 'Authenticated claim URL is invalid')
+ 	}
+ 	// Check raw authority before URL parsing can normalize case, IDNA, or default port.
+ 	const authority = /^https:\/\/([^/?#]+)(?:[/?#]|$)/.exec(urlText)?.[1]
+ 	if(authority !== tunnelHost && authority !== `${tunnelHost}:443`) {
+-		throw AttestorError.badRequest('Authenticated claim authority differs from tunnel')
++		throw rejection('ERROR_BAD_REQUEST', 'CLAIM_URL_MISMATCH', 'Authenticated claim authority differs from tunnel')
+ 	}
+ 	let url: URL
+ 	try {
+ 		url = new URL(urlText)
+ 	} catch {
+-		throw AttestorError.badRequest('Authenticated claim URL is not canonical HTTPS on port 443')
++		throw rejection('ERROR_BAD_REQUEST', 'CLAIM_URL_MISMATCH', 'Authenticated claim URL is not canonical HTTPS on port 443')
+ 	}
+ 	if(
+ 		url.protocol !== 'https:' || url.hostname !== tunnelHost || url.port !== ''
+ 		|| url.username || url.password || url.hash
+-	) throw AttestorError.badRequest('Authenticated claim URL is not canonical HTTPS on port 443')
++	) throw rejection('ERROR_BAD_REQUEST', 'CLAIM_URL_MISMATCH', 'Authenticated claim URL is not canonical HTTPS on port 443')
+ }
+diff --git a/src/tests/admission-diagnostics.test.ts b/src/tests/admission-diagnostics.test.ts
+new file mode 100644
+index 0000000..d5b11d1
+--- /dev/null
++++ b/src/tests/admission-diagnostics.test.ts
+@@ -0,0 +1,239 @@
++import assert from 'node:assert/strict'
++import { spawnSync } from 'node:child_process'
++import { after, describe, it, mock } from 'node:test'
++import { Wallet } from 'ethers'
++
++import { inputContext, signedContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.CLAIM_CHAIN_IDS = '10143'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++process.env.HTTPS_PROXY_URL = ''
++
++let handshake: () => unknown = () => {
++	throw new Error('synthetic handshake failure')
++}
++mock.module('#src/server/utils/process-handshake.ts', {
++	namedExports: { async processHandshake() { return handshake() } }
++})
++
++const [
++	{ parseClaimChainIds },
++	{ REJECTION_REASONS, rejectionReason },
++	{ AttestorError },
++	{ redact },
++	{ assertValidAuthRequest, createAuthRequest },
++	{ authExpiredError },
++	{ assertAuthenticatedClaimAuthority, assertAuthenticatedTunnelHost, assertCanonicalHostWhitelist },
++	{ assertSupportedInputContext, assertSupportedSignedContext },
++	{ assertValidClaimRequest },
++	{ makeTcpTunnel },
++	{ AttestorServerSocket },
++	{ createTunnel },
++	{ claimTunnel },
++	{ claimTeeBundle },
++	{ SIGNATURES },
++	proto
++] = await Promise.all([
++	import('#src/config/claim-chain-ids.ts'),
++	import('#src/utils/rejection-reason.ts'),
++	import('#src/utils/error.ts'),
++	import('#src/utils/logger.ts'),
++	import('#src/utils/auth.ts'),
++	import('#src/server/utils/auth-session.ts'),
++	import('#src/server/utils/host-policy.ts'),
++	import('#src/server/utils/claim-context-policy.ts'),
++	import('#src/server/utils/assert-valid-claim-request.ts'),
++	import('#src/server/tunnels/make-tcp-tunnel.ts'),
++	import('#src/server/socket.ts'),
++	import('#src/server/handlers/createTunnel.ts'),
++	import('#src/server/handlers/claimTunnel.ts'),
++	import('#src/server/handlers/claimTeeBundle.ts'),
++	import('#src/utils/signatures/index.ts'),
++	import('#src/proto/api.ts')
++])
++
++type Reason = keyof typeof REJECTION_REASONS
++const ETH = proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH
++const logger = { info() {}, debug() {}, warn() {}, error() {}, trace() {}, child() { return logger } } as any
++const exercised = new Set<Reason>()
++
++async function expectReason(reason: Reason, code: string, action: () => unknown) {
++	await assert.rejects(async() => action(), (err: unknown) => {
++		assert.ok(err instanceof AttestorError, String(err))
++		assert.equal(err.code, code)
++		assert.equal(rejectionReason(err), reason)
++		assert.deepEqual(JSON.parse(err.toProto().data), { ...err.data, reason })
++		return true
++	})
++	exercised.add(reason)
++}
++
++function authData(overrides: Partial<{ id: string, expiresAt: number, hostWhitelist: string[] }> = {}) {
++	const now = Math.floor(Date.now() / 1000)
++	return { id: TEST_SESSION_ID, createdAt: now, expiresAt: now + 60, hostWhitelist: ['example.com'], ...overrides }
++}
++
++function tunnel(createRequest: Record<string, unknown> = {}, transcript: unknown[] = []) {
++	return { createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '', ...createRequest }, transcript, async close() {} }
++}
++
++function claimClient(overrides: Record<string, unknown> = {}) {
++	return {
++		authIdentity: TEST_SESSION_ID,
++		authHostWhitelist: ['example.com'],
++		metadata: { signatureType: ETH, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
++		tunnels: {},
++		assertAuthActive() {},
++		getTunnel() { return tunnel() },
++		removeTunnel() {},
++		...overrides
++	}
++}
++
++function claimRequest(context = inputContext(), timestampS = Math.floor(Date.now() / 1000), transcript: any[] = []) {
++	return proto.ClaimTunnelRequest.create({
++		request: { id: 1, host: 'example.com', port: 443 },
++		data: { provider: 'http', parameters: '{"url":"https://example.com/"}', context, timestampS },
++		transcript
++	})
++}
++
++const VALID_HTTP_PARAMS = '{"method":"GET","responseMatches":[{"type":"contains","value":"synthetic"}],"url":"https://example.com/"}'
++
++async function signedClaimRequest(owner: { address: string, privateKey: string }, parameters = VALID_HTTP_PARAMS) {
++	const request = proto.ClaimTunnelRequest.create({
++		request: { id: 1, host: 'example.com', port: 443 },
++		data: { provider: 'http', parameters, context: inputContext(), owner: owner.address.toLowerCase(), timestampS: Math.floor(Date.now() / 1000) }
++	})
++	const signature = await SIGNATURES[ETH].sign(proto.ClaimTunnelRequest.encode(request).finish(), owner.privateKey)
++	return { ...request, signatures: { requestSignature: signature } }
++}
++
++describe('CLAIM_CHAIN_IDS', () => {
++	it('accepts only strictly ascending canonical decimal chain IDs', () => {
++		assert.deepEqual(parseClaimChainIds('10143'), ['10143'])
++		assert.deepEqual(parseClaimChainIds('1,8453,10143'), ['1', '8453', '10143'])
++		assert.deepEqual(parseClaimChainIds('9007199254740991'), ['9007199254740991'])
++		for(const raw of [undefined, '', '0', '010143', '+10143', '-1', '1.0', '1e4', '0x279f', ' 10143', '10143 ',
++			'10143,', ',10143', '10143,,1', '10143,1', '1,1', '1, 2', '9007199254740992']) {
++			assert.throws(() => parseClaimChainIds(raw), /CLAIM_CHAIN_IDS/, String(raw))
++		}
++	})
++
++	it('fails before the server listener when missing or malformed', () => {
++		for(const raw of [undefined, '', '10143,10143']) {
++			const env: NodeJS.ProcessEnv = { ...process.env, CLAIM_EPOCH: '2' }
++			if(raw === undefined) delete env.CLAIM_CHAIN_IDS
++			else env.CLAIM_CHAIN_IDS = raw
++			const result = spawnSync(process.execPath, ['--experimental-strip-types', 'src/scripts/start-server.ts'], { env, encoding: 'utf8', timeout: 10_000 })
++			assert.notEqual(result.status, 0)
++			assert.match(result.stderr, /CLAIM_CHAIN_IDS must be strictly ascending/)
++		}
++	})
++
++	it('admits register, bid and sandbox forms only on configured chains', () => {
++		const forms = [
++			`register:%c:0x${'4'.repeat(40)}:nonce`,
++			`bid:%c:0x${'4'.repeat(40)}:0:1:nonce`,
++			`sandbox:%c:${TEST_CONTEXT_ADDRESS}:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f`
++		]
++		for(const form of forms) {
++			const raw = (chain: string) => JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: form.replace('%c', chain), reclaimSessionId: TEST_SESSION_ID })
++			assert.equal(assertSupportedInputContext(raw('84532'), TEST_SESSION_ID, ['84532', '10143']).reclaimSessionId, TEST_SESSION_ID)
++			assert.throws(() => assertSupportedInputContext(raw('84532'), TEST_SESSION_ID, TEST_CHAIN_IDS), (err: unknown) => rejectionReason(err) === 'CLAIM_CONTEXT_CHAIN_NOT_ALLOWED')
++			assert.throws(() => assertSupportedInputContext(raw('010143'), TEST_SESSION_ID, TEST_CHAIN_IDS), (err: unknown) => rejectionReason(err) === 'CLAIM_CONTEXT_MESSAGE_UNSUPPORTED')
++		}
++	})
++})
++
++describe('finite rejection reasons', () => {
++	after(() => {
++		assert.deepEqual([...exercised].sort(), Object.keys(REJECTION_REASONS).sort(), 'a reason in the table has no test')
++	})
++
++	it('labels auth failures', async() => {
++		const issuer = Wallet.createRandom()
++		process.env.AUTHENTICATION_PUBLIC_KEY = issuer.publicKey
++		try {
++			await expectReason('AUTH_REQUIRED', 'ERROR_AUTHENTICATION_FAILED', () => assertValidAuthRequest(undefined, ETH))
++			await expectReason('AUTH_INVALID', 'ERROR_AUTHENTICATION_FAILED', () => assertValidAuthRequest({ signature: new Uint8Array() } as any, ETH))
++			const foreign = await createAuthRequest(authData(), Wallet.createRandom().privateKey)
++			await expectReason('AUTH_INVALID', 'ERROR_AUTHENTICATION_FAILED', () => assertValidAuthRequest(foreign, ETH))
++			const expired = await createAuthRequest(authData({ expiresAt: Math.floor(Date.now() / 1000) }), issuer.privateKey)
++			await expectReason('AUTH_EXPIRED', 'ERROR_AUTHENTICATION_FAILED', () => assertValidAuthRequest(expired, ETH))
++		} finally {
++			delete process.env.AUTHENTICATION_PUBLIC_KEY
++		}
++		await expectReason('AUTH_EXPIRED', 'ERROR_AUTHENTICATION_FAILED', () => { throw authExpiredError() })
++		await expectReason('HOST_LIST_INVALID', 'ERROR_BAD_REQUEST', () => assertCanonicalHostWhitelist([]))
++		await expectReason('HOST_LIST_INVALID', 'ERROR_BAD_REQUEST', () => assertCanonicalHostWhitelist(['b.example.com', 'a.example.com']))
++	})
++
++	it('labels tunnel admission failures', async() => {
++		const ctx = (client: Record<string, unknown>) => ({ logger, client }) as any
++		await expectReason('AUTH_REQUIRED', 'ERROR_AUTHENTICATION_FAILED', () => createTunnel({ id: 1, host: 'example.com', port: 443 } as any, ctx(claimClient({ authHostWhitelist: undefined }))))
++		await expectReason('TUNNEL_ID_IN_USE', 'ERROR_BAD_REQUEST', () => createTunnel({ id: 1, host: 'example.com', port: 443 } as any, ctx(claimClient({ tunnels: { 1: tunnel() } }))))
++		await expectReason('PORT_NOT_ALLOWED', 'ERROR_BAD_REQUEST', () => createTunnel({ id: 1, host: 'example.com', port: 8443 } as any, ctx(claimClient())))
++		await expectReason('HOST_NOT_ALLOWED', 'ERROR_BAD_REQUEST', () => createTunnel({ id: 1, host: 'other.example', port: 443 } as any, ctx(claimClient())))
++		await expectReason('HOST_NOT_ALLOWED', 'ERROR_BAD_REQUEST', () => assertAuthenticatedTunnelHost(['example.com'], 'sub.example.com', 443))
++		await expectReason('PROXY_NOT_CONFIGURED', 'ERROR_BAD_REQUEST', () => makeTcpTunnel({ host: 'example.com', port: 443, geoLocation: 'US', logger } as any))
++		await expectReason('TUNNEL_NOT_FOUND', 'ERROR_NOT_FOUND', () => AttestorServerSocket.prototype.getTunnel.call({ tunnels: {} } as any, 9))
++	})
++
++	it('labels claimTunnel rejections before validation and signing', async() => {
++		const ctx = (client: Record<string, unknown>) => ({ logger, client }) as any
++		await expectReason('TUNNEL_REQUEST_MISMATCH', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest(), ctx(claimClient({ getTunnel: () => tunnel({ port: 8443 }) }))))
++		const tunnelBytes = [{ sender: 'client', message: new Uint8Array([1]) }]
++		const claimBytes = [{ sender: proto.TranscriptMessageSenderType.TRANSCRIPT_MESSAGE_SENDER_TYPE_CLIENT, message: new Uint8Array([2]) }]
++		await expectReason('TRANSCRIPT_MISMATCH', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest(inputContext(), undefined, claimBytes), ctx(claimClient({ getTunnel: () => tunnel({}, tunnelBytes) }))))
++		await expectReason('CLAIM_CONTEXT_INVALID', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest('{"contextAddress":"0x1"}'), ctx(claimClient())))
++		await expectReason('CLAIM_CONTEXT_SESSION_MISMATCH', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest(inputContext('another-session')), ctx(claimClient())))
++		const otherChain = inputContext().replace(':10143:', ':84532:')
++		await expectReason('CLAIM_CONTEXT_CHAIN_NOT_ALLOWED', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest(otherChain), ctx(claimClient())))
++		const freeText = JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: 'Auction verification', reclaimSessionId: TEST_SESSION_ID })
++		await expectReason('CLAIM_CONTEXT_MESSAGE_UNSUPPORTED', 'ERROR_BAD_REQUEST', () => assertSupportedInputContext(freeText, TEST_SESSION_ID, TEST_CHAIN_IDS))
++		const accepted = assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS)
++		await expectReason('SIGNED_CONTEXT_INVALID', 'ERROR_BAD_REQUEST', () => assertSupportedSignedContext(signedContext('synthetic', 'another-session'), accepted))
++		await expectReason('AUTH_EXPIRED', 'ERROR_AUTHENTICATION_FAILED', () => claimTunnel(claimRequest(), ctx(claimClient({ assertAuthActive() { throw authExpiredError() } }))))
++		await expectReason('TEE_CLAIMS_DISABLED', 'ERROR_BAD_REQUEST', () => claimTeeBundle({} as any, ctx(claimClient())))
++
++		const skewed = await claimTunnel(claimRequest(inputContext(), Math.floor(Date.now() / 1000) + 3600), ctx(claimClient()))
++		const skewError = AttestorError.fromProto(skewed.error)
++		assert.equal(skewError.code, 'ERROR_INVALID_CLAIM')
++		await expectReason('CLAIM_TIMESTAMP_SKEW', 'ERROR_INVALID_CLAIM', () => { throw skewError })
++	})
++
++	it('labels claim authority failures before signing', async() => {
++		const claim = (provider: string, parameters: string) => ({ provider, parameters, context: '', owner: '', timestampS: 0, epoch: 2, identifier: '' }) as any
++		await expectReason('TUNNEL_REQUEST_MISMATCH', 'ERROR_BAD_REQUEST', () => assertAuthenticatedClaimAuthority(claim('http', '{"url":"https://example.com/"}'), ['example.com'], undefined, undefined))
++		await expectReason('CLAIM_PROVIDER_UNSUPPORTED', 'ERROR_BAD_REQUEST', () => assertAuthenticatedClaimAuthority(claim('tee', '{"url":"https://example.com/"}'), ['example.com'], 'example.com', 443))
++		await expectReason('CLAIM_PARAMS_INVALID', 'ERROR_BAD_REQUEST', () => assertAuthenticatedClaimAuthority(claim('http', '{ "url":"https://example.com/"}'), ['example.com'], 'example.com', 443))
++		await expectReason('CLAIM_URL_MISMATCH', 'ERROR_BAD_REQUEST', () => assertAuthenticatedClaimAuthority(claim('http', '{"url":"https://evil.example/"}'), ['example.com'], 'example.com', 443))
++	})
++
++	it('labels each claim validation stage', async() => {
++		await expectReason('CLAIM_REQUEST_INVALID', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(proto.ClaimTunnelRequest.create({}), { signatureType: ETH } as any, logger))
++		const owner = Wallet.createRandom()
++		const signed = await signedClaimRequest(owner)
++		const metadata = { signatureType: ETH, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 } as any
++		await expectReason('CLAIM_SIGNATURE_INVALID', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest({ ...signed, signatures: undefined }, metadata, logger))
++		const forged = { ...signed, data: { ...signed.data!, owner: Wallet.createRandom().address.toLowerCase() } }
++		await expectReason('CLAIM_SIGNATURE_INVALID', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(forged, metadata, logger))
++		await expectReason('TRANSCRIPT_DECRYPT_FAILED', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(signed, metadata, logger))
++		handshake = () => ({ tlsVersion: 'TLS1_3', cipherSuite: 'TLS_CHACHA20_POLY1305_SHA256', hostname: 'other.example', nextMsgIndex: 0 })
++		await expectReason('TLS_HOST_MISMATCH', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(signed, metadata, logger))
++		handshake = () => ({ tlsVersion: 'TLS1_3', cipherSuite: 'TLS_CHACHA20_POLY1305_SHA256', hostname: 'example.com', nextMsgIndex: 0 })
++		const schemaInvalid = await signedClaimRequest(owner, '{"url":"https://example.com/"}')
++		await expectReason('PROVIDER_PARAMS_INVALID', 'ERROR_BAD_REQUEST', () => assertValidClaimRequest(schemaInvalid, metadata, logger))
++		await expectReason('PROVIDER_VALIDATION_FAILED', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(signed, metadata, logger))
++	})
++
++	it('projects only known reasons into logs', () => {
++		const known = new AttestorError('ERROR_BAD_REQUEST', 'CANARY_MESSAGE', { reason: 'HOST_NOT_ALLOWED', host: 'CANARY_HOST' })
++		assert.deepEqual(redact({ err: known }), { errorCode: 'ERROR_BAD_REQUEST', reason: 'HOST_NOT_ALLOWED' })
++		const unknown = new AttestorError('ERROR_BAD_REQUEST', 'CANARY_MESSAGE', { reason: 'CANARY_REASON' })
++		assert.deepEqual(redact({ err: unknown }), { errorCode: 'ERROR_BAD_REQUEST' })
++		assert.deepEqual(redact({ reason: 'CANARY_REASON', errorCode: 'ERROR_BAD_REQUEST' }), { errorCode: 'ERROR_BAD_REQUEST' })
++	})
++})
+diff --git a/src/tests/auth-rpc-response-lifetime.test.ts b/src/tests/auth-rpc-response-lifetime.test.ts
+index ba17da7..bf63a33 100644
+--- a/src/tests/auth-rpc-response-lifetime.test.ts
++++ b/src/tests/auth-rpc-response-lifetime.test.ts
+@@ -35,6 +35,7 @@ if(process.env[SCENARIO_ENV]) {
+ 
+ async function runScenario(scenario: string) {
+ 	process.env.CLAIM_EPOCH = '2'
++	process.env.CLAIM_CHAIN_IDS = '10143'
+ 	process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000001'
+ 	const { setCryptoImplementation } = await import('@reclaimprotocol/tls')
+ 	const { webcryptoCrypto } = await import('@reclaimprotocol/tls/webcrypto')
+diff --git a/src/tests/auth-signing-deadline.test.ts b/src/tests/auth-signing-deadline.test.ts
+index 77ee1d8..005e736 100644
+--- a/src/tests/auth-signing-deadline.test.ts
++++ b/src/tests/auth-signing-deadline.test.ts
+@@ -5,6 +5,8 @@ import { AttestorError } from '#src/utils/error.ts'
+ import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
++
++process.env.CLAIM_CHAIN_IDS = '10143'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ 
+ const claimInfo = {
+diff --git a/src/tests/auth-socket-lifetime.test.ts b/src/tests/auth-socket-lifetime.test.ts
+index b63fb4c..281485c 100644
+--- a/src/tests/auth-socket-lifetime.test.ts
++++ b/src/tests/auth-socket-lifetime.test.ts
+@@ -4,6 +4,8 @@ import { it } from 'node:test'
+ import { Wallet } from 'ethers'
+ 
+ process.env.CLAIM_EPOCH = '2'
++
++process.env.CLAIM_CHAIN_IDS = '10143'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ process.env.DISABLE_BGP_CHECKS = '1'
+ 
+diff --git a/src/tests/claim-epoch.test.ts b/src/tests/claim-epoch.test.ts
+index 372fa5d..8534335 100644
+--- a/src/tests/claim-epoch.test.ts
++++ b/src/tests/claim-epoch.test.ts
+@@ -6,6 +6,8 @@ import type { ClaimTunnelResponse } from '#src/proto/api.ts'
+ import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
++
++process.env.CLAIM_CHAIN_IDS = '10143'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ 
+ const claimInfo = {
+diff --git a/src/tests/extracted-key.test.ts b/src/tests/extracted-key.test.ts
+index a123f91..30e8e0c 100644
+--- a/src/tests/extracted-key.test.ts
++++ b/src/tests/extracted-key.test.ts
+@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
+ import { it } from 'node:test'
+ 
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { inputContext, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ // Value-equal to @umia/types proof-context.extraction-key-vectors.json; a repo test enforces it.
+ const keys = JSON.parse(
+@@ -19,7 +19,7 @@ function signed(key: string) {
+ }
+ 
+ it('signs exactly the shared extraction key vectors', () => {
+-	const input = assertSupportedInputContext(inputContext(), TEST_SESSION_ID)
++	const input = assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS)
+ 	for(const key of keys.accepted) {
+ 		assert.doesNotThrow(() => assertSupportedSignedContext(signed(key), input), key)
+ 	}
+diff --git a/src/tests/host-extraction-provenance.test.ts b/src/tests/host-extraction-provenance.test.ts
+index 2b93f5f..ddea881 100644
+--- a/src/tests/host-extraction-provenance.test.ts
++++ b/src/tests/host-extraction-provenance.test.ts
+@@ -4,7 +4,7 @@ import { it, mock } from 'node:test'
+ import { providers } from '#src/providers/index.ts'
+ import { assertValidProviderTranscript } from '#src/server/utils/assert-valid-claim-request.ts'
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { inputContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, TEST_CHAIN_IDS, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ const logger = { info() {}, debug() {}, warn() {}, error() {} }
+ const parameters = JSON.stringify({
+@@ -29,7 +29,7 @@ it('requires nonempty mocked provider extraction through real context mutation',
+ 			logger as any, { version: 1 } as any
+ 		)
+ 		assert.equal(receipt.mock.calls.length, 1)
+-		assertSupportedSignedContext(result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID))
++		assertSupportedSignedContext(result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS))
+ 		assert.deepEqual(JSON.parse(result.context).extractedParameters,
+ 			{ account: 'synthetic-commitment' })
+ 	} finally {
+@@ -47,7 +47,7 @@ it('requires nonempty mocked provider extraction through real context mutation',
+ 		assert.equal(emptyReceipt.mock.calls.length, 1)
+ 		assert.equal(Object.hasOwn(JSON.parse(result.context), 'extractedParameters'), false)
+ 		assert.throws(() => assertSupportedSignedContext(
+-			result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID)
++			result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS)
+ 		), /Unsupported claim context/)
+ 	} finally {
+ 		emptyReceipt.mock.restore()
+diff --git a/src/tests/host-policy.test.ts b/src/tests/host-policy.test.ts
+index 5b4995a..e675a1f 100644
+--- a/src/tests/host-policy.test.ts
++++ b/src/tests/host-policy.test.ts
+@@ -7,9 +7,11 @@ import type { ProviderClaimInfo } from '#src/proto/api.ts'
+ import { canonicalStringify, createSignDataForClaim } from '#src/utils/claims.ts'
+ import { SIGNATURES } from '#src/utils/signatures/index.ts'
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { inputContext, signedContext, TEST_AUCTION_ADDRESS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, signedContext, TEST_AUCTION_ADDRESS, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
++
++process.env.CLAIM_CHAIN_IDS = '10143'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ 
+ let dialCount = 0
+@@ -247,7 +249,7 @@ it('accepts the hook-supported canonical bid context with one raw target each',
+ 		extractedParameters: { account: 'synthetic-commitment' },
+ 		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
+ 	})
+-	assertSupportedSignedContext(signed, assertSupportedInputContext(input, TEST_SESSION_ID))
++	assertSupportedSignedContext(signed, assertSupportedInputContext(input, TEST_SESSION_ID, TEST_CHAIN_IDS))
+ })
+ 
+ it('rejects TEE before verification, either signature, or a useful response', async() => {
+diff --git a/src/tests/log-privacy.test.ts b/src/tests/log-privacy.test.ts
+index 755b543..0484a33 100644
+--- a/src/tests/log-privacy.test.ts
++++ b/src/tests/log-privacy.test.ts
+@@ -8,6 +8,8 @@ import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/c
+ import { canonicalStringify } from '#src/utils/claims.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
++
++process.env.CLAIM_CHAIN_IDS = '10143'
+ process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
+ process.env.DISABLE_BGP_CHECKS = '1'
+ 
+@@ -17,6 +19,7 @@ const canaries = {
+ 	proof: 'CANARY_PROOF_PRIVATE', account: 'CANARY_ACCOUNT_PRIVATE',
+ 	error: 'CANARY_ERROR_PRIVATE', key: 'CANARY_KEY_PRIVATE'
+ }
++const VERIFIED_SESSION_ID = 'verified-zktls-session'
+ const claimInfo = {
+ 	provider: 'http', parameters: canonicalStringify({ url: 'https://example.com/', secret: canaries.account }),
+ 	context: signedContext(canaries.proof), owner: canaries.account,
+@@ -61,13 +64,14 @@ function capture(level: 'info' | 'debug' | 'trace') {
+ function assertPrivateLogs(lines: string[]) {
+ 	const raw = lines.join('')
+ 	for(const canary of Object.values(canaries)) assert.ok(!raw.includes(canary), 'synthetic secret reached a log')
+-	const allowed = new Set(['level', 'time', 'connectionRef', 'operationRef', 'handler', 'stage', 'outcome', 'errorCode', 'durationMs', 'msg'])
++	const allowed = new Set(['level', 'time', 'connectionRef', 'operationRef', 'zktlsSessionId', 'handler', 'stage', 'outcome', 'errorCode', 'reason', 'durationMs', 'msg'])
+ 	const records = lines.map(line => { const keys = [...line.matchAll(/"([A-Za-z][A-Za-z0-9]*)":/g)].map(match => match[1]); assert.equal(new Set(keys).size, keys.length, 'duplicate JSON key in log line'); return JSON.parse(line) as Record<string, unknown> })
+ 	for(const record of records) {
+ 		assert.ok(Object.keys(record).every(key => allowed.has(key)))
+ 		assert.equal(record.msg, 'attestor diagnostic')
+ 		if(record.connectionRef) assert.match(String(record.connectionRef), /^[0-9a-f-]{36}$/)
+ 		if(record.operationRef) assert.match(String(record.operationRef), /^[0-9a-f-]{36}$/)
++		if(record.zktlsSessionId) assert.equal(record.zktlsSessionId, VERIFIED_SESSION_ID)
+ 	}
+ 	return records
+ }
+@@ -89,10 +93,10 @@ for(const level of ['info', 'debug'] as const) {
+ 			await assert.rejects(invalid.waitForInit(), (err: any) => err.code === 'ERROR_AUTHENTICATION_FAILED')
+ 
+ 			const expiresAt = Math.floor(Date.now() / 1000) + 3
+-			const auth = await createAuthRequest({ id: canaries.auth, hostWhitelist: ['example.com'], expiresAt }, key.privateKey)
++			const auth = await createAuthRequest({ id: VERIFIED_SESSION_ID, hostWhitelist: ['example.com'], expiresAt }, key.privateKey)
+ 			client = new AttestorClient({ url, authRequest: auth })
+ 			await client.waitForInit()
+-			const ws = [...server.clients].find(socket => (socket as any).serverSocket?.authIdentity === canaries.auth)!
++			const ws = [...server.clients].find(socket => (socket as any).serverSocket?.authIdentity === VERIFIED_SESSION_ID)!
+ 			const socket = (ws as any).serverSocket
+ 			const rpc = (type: string, data: unknown) => new Promise<any>(resolve =>
+ 				socket.dispatchRPCEvent('rpc-request', { type, data, requestId: canaries.requestId, respond: resolve }))
+@@ -102,6 +106,8 @@ for(const level of ['info', 'debug'] as const) {
+ 			const tunnelFailures = assertPrivateLogs(lines.slice(beforeTunnelFailure)).filter(item => item.outcome === 'failure')
+ 			assert.equal(tunnelFailures.length, 1, 'createTunnel emitted duplicate failure records')
+ 			assert.ok(tunnelFailures[0].connectionRef && tunnelFailures[0].operationRef, JSON.stringify(tunnelFailures[0]))
++			assert.equal(tunnelFailures[0].zktlsSessionId, VERIFIED_SESSION_ID)
++			assert.equal(tunnelFailures[0].reason, 'HOST_NOT_ALLOWED')
+ 			for(const [type, data] of [
+ 				['claimTunnel', {}],
+ 				['claimTeeBundle', {}]
+@@ -149,8 +155,12 @@ for(const level of ['info', 'debug'] as const) {
+ 			logger.error(nestedError, canaries.error)
+ 			while(Date.now() <= expiresAt * 1000 + 100) await delay(25)
+ 			const records = assertPrivateLogs(lines)
+-			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'failure' && item.errorCode === 'ERROR_AUTHENTICATION_FAILED'))
+-			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'expired'))
++			const initFailures = records.filter(item => item.stage === 'init' && item.outcome === 'failure')
++			assert.ok(initFailures.some(item => item.errorCode === 'ERROR_AUTHENTICATION_FAILED' && item.reason === 'AUTH_REQUIRED'))
++			assert.ok(initFailures.some(item => item.errorCode === 'ERROR_AUTHENTICATION_FAILED' && item.reason === 'AUTH_INVALID'))
++			assert.ok(initFailures.every(item => item.zktlsSessionId === undefined), 'unverified auth ID reached a log')
++			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'success' && item.zktlsSessionId === VERIFIED_SESSION_ID))
++			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'expired' && item.zktlsSessionId === VERIFIED_SESSION_ID))
+ 			assert.ok(records.some(item => item.stage === 'rpc' && item.outcome === 'failure' && item.errorCode === 'ERROR_BAD_REQUEST'))
+ 			for(const stage of ['claimTunnel']) {
+ 				assert.ok(records.some(item => item.stage === stage && item.outcome === 'success'))
+@@ -177,7 +187,7 @@ it('sanitizes outgoing trace and throwing log values without changing the caller
+ 	assert.equal(missingRef, undefined)
+ 	assert.equal(loggerModule.createServerLogRef(() => canaries.auth), undefined)
+ 	logger.child({ connectionRef: missingRef }).warn('auth expired')
+-	const child = logger.child({ connectionRef: forgedRef, authId: canaries.auth })
++	const child = logger.child({ connectionRef: forgedRef, authId: canaries.auth, zktlsSessionId: canaries.auth, reason: canaries.error })
+ 	logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID) }).child({ handler: 'claimTunnel' }).trace({ msg: { headers: { cookie: canaries.headers }, proof: canaries.proof } }, 'sending messages')
+ 	child.error({ stage: 'claimTunnel', outcome: 'success', errorCode: 'ERROR_NO_ERROR', err: nestedError }, canaries.error)
+ 	const spoofRecord = JSON.parse(lines.at(-1)!) as Record<string, unknown>
+diff --git a/src/tests/sandbox-context.test.ts b/src/tests/sandbox-context.test.ts
+index dc8dcb9..5fdb233 100644
+--- a/src/tests/sandbox-context.test.ts
++++ b/src/tests/sandbox-context.test.ts
+@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
+ import { readFileSync } from 'node:fs'
+ import { it } from 'node:test'
+ 
+-import { assertSupportedInputContext, assertSupportedSignedContext, isSandboxContextMessage } from '#src/server/utils/claim-context-policy.ts'
+-import { TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
++import { TEST_CHAIN_IDS, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
+ 
+ // Byte-equal to @umia/types proof-context.sandbox-vectors.json; a repo test enforces it.
+ const vectors = JSON.parse(
+@@ -14,19 +14,26 @@ function input(contextMessage: string, contextAddress = vectors.contextAddress)
+ 	return JSON.stringify({ contextAddress, contextMessage, reclaimSessionId: TEST_SESSION_ID })
+ }
+ 
+-it('recognises exactly the shared sandbox context vectors', () => {
++it('admits exactly the shared sandbox context vectors as sandbox messages', () => {
+ 	assert.equal(vectors.chainId, 10143)
+ 	for(const message of vectors.accepted) {
+-		assert.equal(isSandboxContextMessage(message, vectors.contextAddress), true, message)
++		assert.equal(assertSupportedInputContext(input(message), TEST_SESSION_ID, TEST_CHAIN_IDS).contextMessage, message)
+ 	}
++	// A rejected vector may still be a valid auction message; it must never pass as a sandbox one.
+ 	for(const message of vectors.rejected) {
+-		assert.equal(isSandboxContextMessage(message, vectors.contextAddress), false, message)
++		let admitted = true
++		try {
++			assertSupportedInputContext(input(message), TEST_SESSION_ID, TEST_CHAIN_IDS)
++		} catch {
++			admitted = false
++		}
++		assert.ok(!admitted || /^(register|bid):/.test(message), message)
+ 	}
+ })
+ 
+ it('admits a sandbox context bound to its wallet and session through both checks', () => {
+ 	const message = vectors.accepted[0]
+-	const accepted = assertSupportedInputContext(input(message), TEST_SESSION_ID)
++	const accepted = assertSupportedInputContext(input(message), TEST_SESSION_ID, TEST_CHAIN_IDS)
+ 	assertSupportedSignedContext(JSON.stringify({
+ 		contextAddress: vectors.contextAddress, contextMessage: message,
+ 		extractedParameters: { handle: 'synthetic' },
+@@ -42,6 +49,6 @@ it('rejects a sandbox context for another wallet, another session, or free text'
+ 		[input('Auction verification'), TEST_SESSION_ID],
+ 		[input('test-only sandbox run:alpha'), TEST_SESSION_ID],
+ 	]) {
+-		assert.throws(() => assertSupportedInputContext(raw, session), /Unsupported claim context/)
++		assert.throws(() => assertSupportedInputContext(raw, session, TEST_CHAIN_IDS), /Unsupported claim context/)
+ 	}
+ })
+diff --git a/src/tests/utils/claim-context.ts b/src/tests/utils/claim-context.ts
+index 6a46264..d4538e3 100644
+--- a/src/tests/utils/claim-context.ts
++++ b/src/tests/utils/claim-context.ts
+@@ -1,4 +1,5 @@
+ export const TEST_SESSION_ID = 'bound-session-id'
++export const TEST_CHAIN_IDS: readonly string[] = ['10143']
+ export const TEST_CONTEXT_ADDRESS = '0x3333333333333333333333333333333333333333'
+ export const TEST_AUCTION_ADDRESS = '0x4444444444444444444444444444444444444444'
+ export const TEST_CONTEXT_MESSAGE = `register:10143:${TEST_AUCTION_ADDRESS}:nonce`
+diff --git a/src/utils/auth.ts b/src/utils/auth.ts
+index a5c65c0..0be4ca2 100644
+--- a/src/utils/auth.ts
++++ b/src/utils/auth.ts
+@@ -5,6 +5,7 @@ import type { AuthenticationRequest, ServiceSignatureType } from '#src/proto/api
+ import { AuthenticatedUserData } from '#src/proto/api.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { AttestorError } from '#src/utils/error.ts'
++import { rejection } from '#src/utils/rejection-reason.ts'
+ import { unixTimestampSeconds } from '#src/utils/generics.ts'
+ import { SelectedServiceSignature, SIGNATURES } from '#src/utils/signatures/index.ts'
+ 
+@@ -18,10 +19,7 @@ export async function assertValidAuthRequest(
+ 		// if pub key is provided -- but user didn't attempt to
+ 		// authenticate, then we should throw an error
+ 		if(publicKey) {
+-			throw new AttestorError(
+-				'ERROR_AUTHENTICATION_FAILED',
+-				'User must be authenticated'
+-			)
++			throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_REQUIRED', 'User must be authenticated')
+ 		}
+ 
+ 		return
+@@ -36,10 +34,7 @@ export async function assertValidAuthRequest(
+ 
+ 	const { signature, data } = request
+ 	if(!data) {
+-		throw new AttestorError(
+-			'ERROR_AUTHENTICATION_FAILED',
+-			'Missing data in auth request'
+-		)
++		throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_INVALID', 'Missing data in auth request')
+ 	}
+ 
+ 	assertAuthNotExpired(data)
+@@ -53,19 +48,13 @@ export async function assertValidAuthRequest(
+ 		.verify(proto, signature, address)
+ 	assertAuthNotExpired(data)
+ 	if(!verified) {
+-		throw new AttestorError(
+-			'ERROR_AUTHENTICATION_FAILED',
+-			'Signature verification failed'
+-		)
++		throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_INVALID', 'Signature verification failed')
+ 	}
+ }
+ 
+ function assertAuthNotExpired(data: AuthenticatedUserData) {
+ 	if(!Number.isSafeInteger(data.expiresAt) || data.expiresAt <= unixTimestampSeconds()) {
+-		throw new AttestorError(
+-			'ERROR_AUTHENTICATION_FAILED',
+-			'Authentication request has expired'
+-		)
++		throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_EXPIRED', 'Authentication request has expired')
+ 	}
+ }
+ 
+diff --git a/src/utils/chain-id.ts b/src/utils/chain-id.ts
+new file mode 100644
+index 0000000..dfc7156
+--- /dev/null
++++ b/src/utils/chain-id.ts
+@@ -0,0 +1,2 @@
++/** Canonical decimal chain ID, shared by the CLAIM_CHAIN_IDS boot grammar and context messages. */
++export const CHAIN_ID = /^[1-9][0-9]*$/
+diff --git a/src/utils/logger.ts b/src/utils/logger.ts
+index d76df44..7235112 100644
+--- a/src/utils/logger.ts
++++ b/src/utils/logger.ts
+@@ -4,6 +4,7 @@ import type { LogLevel } from '#src/types/index.ts'
+ import { ErrorCode } from '#src/proto/api.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { AttestorError } from '#src/utils/error.ts'
++import { REJECTION_REASONS, type RejectionReason, rejectionReason } from '#src/utils/rejection-reason.ts'
+ 
+ const STAGES = ['connection', 'init', 'rpc', 'tunnel', 'claimTunnel', 'claimTeeBundle', 'provider', 'tee'] as const
+ const OUTCOMES = ['started', 'success', 'failure', 'timeout', 'expired'] as const
+@@ -12,11 +13,12 @@ type Stage = typeof STAGES[number]
+ type Outcome = typeof OUTCOMES[number]
+ type Handler = typeof HANDLERS[number]
+ type SafeErrorCode = keyof typeof ErrorCode | 'INTERNAL_ERROR'
+-type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode }
++type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode, reason?: RejectionReason }
+ const EVENTS: Record<string, { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode }> = {
+ 	'new connection, validating...': { stage: 'connection', outcome: 'started' },
+ 	'connection accepted': { stage: 'connection', outcome: 'success' },
+ 	'error in new connection': { stage: 'init', outcome: 'failure' },
++	'auth session established': { stage: 'init', outcome: 'success' },
+ 	'auth expired': { stage: 'init', outcome: 'expired', errorCode: 'ERROR_AUTHENTICATION_FAILED' },
+ 	'handling RPC request': { stage: 'rpc', outcome: 'started' },
+ 	'handled RPC request': { stage: 'rpc', outcome: 'success' },
+@@ -40,7 +42,9 @@ const EVENTS: Record<string, { stage: Stage, outcome: Outcome, errorCode?: SafeE
+ }
+ const MAX_DURATION_MS = 86_400_000
+ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
++const SESSION_ID = /^[A-Za-z0-9_:-]{1,128}$/
+ const serverRefs = new WeakSet<object>()
++const sessionRefs = new WeakSet<object>()
+ 
+ export function createServerLogRef(generate: () => string): Readonly<{ value: string }> | undefined {
+ 	// Server callers supply the Node CSPRNG; failed logging correlation is optional.
+@@ -55,6 +59,14 @@ export function createServerLogRef(generate: () => string): Readonly<{ value: st
+ 	}
+ }
+ 
++/** Call only with the ID of a verified auth request: the Umia zkTLS session ID that other hops log. */
++export function createVerifiedSessionRef(id: string): Readonly<{ value: string }> | undefined {
++	if(!SESSION_ID.test(id)) return undefined
++	const ref = Object.freeze({ value: id })
++	sessionRefs.add(ref)
++	return ref
++}
++
+ export function safeRpcStage(type: unknown): Stage {
+ 	if(type === 'init') return 'init'
+ 	if(type === 'createTunnel' || type === 'disconnectTunnel') return 'tunnel'
+@@ -100,7 +112,10 @@ export function makeLogger(
+ 					const event: { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode } = typeof message === 'string' && Object.hasOwn(EVENTS, message)
+ 						? EVENTS[message]
+ 						: { stage: 'rpc', outcome: evidence.errorCode || levelNumber >= 40 ? 'failure' : 'started' }
+-					if(event.outcome === 'success' || event.outcome === 'started') delete evidence.errorCode
++					if(event.outcome === 'success' || event.outcome === 'started') {
++						delete evidence.errorCode
++						delete evidence.reason
++					}
+ 					method.apply(this, [{ ...evidence, ...event }, 'attestor diagnostic'])
+ 				} catch {
+ 					// Logging must not change the result of an attestor operation.
+@@ -162,6 +177,9 @@ function safeChildBindings(input: unknown): Record<string, unknown> {
+ 		if(value.operationRef && typeof value.operationRef === 'object' && serverRefs.has(value.operationRef)) {
+ 			safe.operationRef = value.operationRef
+ 		}
++		if(value.zktlsSessionId && typeof value.zktlsSessionId === 'object' && sessionRefs.has(value.zktlsSessionId)) {
++			safe.zktlsSessionId = value.zktlsSessionId
++		}
+ 		return safe
+ 	} catch {
+ 		return {}
+@@ -176,6 +194,7 @@ function projectContext(input: unknown): Record<string, unknown> {
+ 		if(typeof value.handler === 'string' && HANDLERS.includes(value.handler as Handler)) safe.handler = value.handler
+ 		if(value.connectionRef && typeof value.connectionRef === 'object' && serverRefs.has(value.connectionRef)) safe.connectionRef = (value.connectionRef as { value: string }).value
+ 		if(value.operationRef && typeof value.operationRef === 'object' && serverRefs.has(value.operationRef)) safe.operationRef = (value.operationRef as { value: string }).value
++		if(value.zktlsSessionId && typeof value.zktlsSessionId === 'object' && sessionRefs.has(value.zktlsSessionId)) safe.zktlsSessionId = (value.zktlsSessionId as { value: string }).value
+ 		return safe
+ 	} catch {
+ 		return {}
+@@ -184,20 +203,25 @@ function projectContext(input: unknown): Record<string, unknown> {
+ 
+ 
+ function projectEvidence(input: unknown): SafeEvidence {
+-	if(input instanceof Error) return { errorCode: safeErrorCode(input) }
++	if(input instanceof Error) return errorEvidence(input)
+ 	if(!input || typeof input !== 'object') return {}
+ 	try {
+ 		const value = input as Record<string, unknown>
+ 		const safe: SafeEvidence = {}
+ 		if(typeof value.durationMs === 'number' && Number.isSafeInteger(value.durationMs) && value.durationMs >= 0 && value.durationMs <= MAX_DURATION_MS) safe.durationMs = value.durationMs
+ 		const err = value.err ?? value.error
+-		if(err !== undefined) safe.errorCode = safeErrorCode(err)
++		if(err !== undefined) Object.assign(safe, errorEvidence(err))
+ 		return safe
+ 	} catch {
+ 		return {}
+ 	}
+ }
+ 
++function errorEvidence(err: unknown): SafeEvidence {
++	const reason = rejectionReason(err)
++	return reason ? { errorCode: safeErrorCode(err), reason } : { errorCode: safeErrorCode(err) }
++}
++
+ export function redact(input: unknown): Record<string, unknown> {
+ 	if(!input || typeof input !== 'object') return {}
+ 	try {
+@@ -206,6 +230,7 @@ export function redact(input: unknown): Record<string, unknown> {
+ 		if(typeof value.stage === 'string' && STAGES.includes(value.stage as Stage)) safe.stage = value.stage
+ 		if(typeof value.outcome === 'string' && OUTCOMES.includes(value.outcome as Outcome)) safe.outcome = value.outcome
+ 		if(typeof value.errorCode === 'string' && (value.errorCode === 'INTERNAL_ERROR' || Object.hasOwn(ErrorCode, value.errorCode))) safe.errorCode = value.errorCode
++		if(typeof value.reason === 'string' && Object.hasOwn(REJECTION_REASONS, value.reason)) safe.reason = value.reason
+ 		return safe
+ 	} catch {
+ 		return {}
+diff --git a/src/utils/rejection-reason.ts b/src/utils/rejection-reason.ts
+new file mode 100644
+index 0000000..281c9ab
+--- /dev/null
++++ b/src/utils/rejection-reason.ts
+@@ -0,0 +1,57 @@
++import type { ErrorCode } from '#src/proto/api.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++/** Finite, payload-free reasons returned in `AttestorError.data.reason` and allowed in logs: reason -> when. */
++export const REJECTION_REASONS = {
++	AUTH_REQUIRED: 'init or createTunnel without a verified auth request',
++	AUTH_INVALID: 'auth request without data or with a signature from another key',
++	AUTH_EXPIRED: 'auth expiry reached (now >= expiresAt) at init, RPC, tunnel, signing or delivery',
++	HOST_LIST_INVALID: 'signed host list empty or not sorted, unique, lowercase exact hostnames',
++	TUNNEL_ID_IN_USE: 'createTunnel reuses an open tunnel ID',
++	TUNNEL_NOT_FOUND: 'claimTunnel, tunnel message or disconnect names no open tunnel',
++	HOST_NOT_ALLOWED: 'tunnel or claim host absent from the signed host list',
++	PORT_NOT_ALLOWED: 'tunnel or claim port other than 443',
++	PROXY_NOT_CONFIGURED: 'geoLocation or proxySessionId requested without HTTPS_PROXY_URL',
++	TUNNEL_REQUEST_MISMATCH: 'claim host, port, geoLocation or proxySessionId differs from its tunnel',
++	TRANSCRIPT_MISMATCH: 'claim transcript differs from the bytes the tunnel carried',
++	CLAIM_CONTEXT_INVALID: 'claim context not canonical JSON with exactly the three input keys and a lowercase address',
++	CLAIM_CONTEXT_MESSAGE_UNSUPPORTED: 'contextMessage not a register, bid or wallet-bound sandbox form',
++	CLAIM_CONTEXT_CHAIN_NOT_ALLOWED: 'contextMessage chain absent from CLAIM_CHAIN_IDS',
++	CLAIM_CONTEXT_SESSION_MISMATCH: 'reclaimSessionId differs from the verified auth ID',
++	CLAIM_REQUEST_INVALID: 'claim request without claim data',
++	CLAIM_SIGNATURE_INVALID: 'claim request signature missing or not from the claim owner',
++	CLAIM_TIMESTAMP_SKEW: 'claim timestamp too far in the future',
++	TRANSCRIPT_DECRYPT_FAILED: 'TLS transcript handshake, reveal or ZK proof failed verification',
++	TLS_HOST_MISMATCH: 'TLS server name differs from the tunnel host',
++	PROVIDER_PARAMS_INVALID: 'claim parameters fail the provider schema',
++	PROVIDER_VALIDATION_FAILED: 'provider unknown, or it rejected the decrypted request or response',
++	SIGNED_CONTEXT_INVALID: 'derived context or extracted parameters fail the before-sign policy',
++	CLAIM_PROVIDER_UNSUPPORTED: 'claim provider other than http',
++	CLAIM_PARAMS_INVALID: 'claim parameters not canonical JSON with a string url',
++	CLAIM_URL_MISMATCH: 'claim URL not canonical HTTPS on port 443 at the tunnel host',
++	TEE_CLAIMS_DISABLED: 'claimTeeBundle, disabled until TEE outputs bind the endpoint'
++} as const
++export type RejectionReason = keyof typeof REJECTION_REASONS
++
++export function rejection(code: keyof typeof ErrorCode, reason: RejectionReason, message: string) {
++	return new AttestorError(code, message, { reason })
++}
++
++export function rejectionReason(err: unknown): RejectionReason | undefined {
++	if(!(err instanceof AttestorError)) return undefined
++	const reason: unknown = err.data?.reason
++	return typeof reason === 'string' && Object.hasOwn(REJECTION_REASONS, reason)
++		? reason as RejectionReason
++		: undefined
++}
++
++/** Labels an upstream failure once; the innermost reason wins. */
++export function withRejectionReason(
++	err: unknown,
++	reason: RejectionReason,
++	fallbackCode: keyof typeof ErrorCode = 'ERROR_INVALID_CLAIM'
++) {
++	const base = AttestorError.fromError(err as Error, fallbackCode)
++	if(rejectionReason(base)) return base
++	return new AttestorError(base.code, base.message, { ...base.data, reason })
++}

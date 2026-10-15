@@ -1,0 +1,829 @@
+diff --git a/src/server/handlers/claimTeeBundle.ts b/src/server/handlers/claimTeeBundle.ts
+index d48962c..89e1e8b 100644
+--- a/src/server/handlers/claimTeeBundle.ts
++++ b/src/server/handlers/claimTeeBundle.ts
+@@ -23,7 +23,16 @@ import type { ProviderCtx, RPCHandler, Transcript } from '#src/types/index.ts'
+ import { AttestorError } from '#src/utils/error.ts'
+ import { getIdentifierFromClaimInfo } from '#src/utils/index.ts'
+ 
+-export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async(
++export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async(request, ctx) => {
++	try {
++		return await processClaimTeeBundle(request, ctx)
++	} catch(err) {
++		ctx.logger.error({ err }, 'claim handler failed')
++		throw err
++	}
++}
++
++const processClaimTeeBundle: RPCHandler<'claimTeeBundle'> = async(
+ 	teeBundleRequest,
+ 	{ logger, client }
+ ) => {
+diff --git a/src/server/handlers/claimTunnel.ts b/src/server/handlers/claimTunnel.ts
+index 0058841..8c10aff 100644
+--- a/src/server/handlers/claimTunnel.ts
++++ b/src/server/handlers/claimTunnel.ts
+@@ -31,7 +31,7 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 			(acc, { message }) => acc + message.length,
+ 			0
+ 		)
+-		tx?.setLabel('transcriptBytes', transcriptBytes.toString())
++		tx?.setLabel('transcriptBytes', Math.min(transcriptBytes, 100_000_000))
+ 	}
+ 
+ 	// we throw an error for cases where the attestor cannot prove
+@@ -97,6 +97,8 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 
+ 	// remove tunnel from client -- to free up our mem
+ 	client.removeTunnel(request.id)
++	if(res.error) logger.warn('claim tunnel rejected')
++	else logger.info('claim tunnel completed')
+ 
+ 	return res
+-}
+\ No newline at end of file
++}
+diff --git a/src/server/handlers/createTunnel.ts b/src/server/handlers/createTunnel.ts
+index 694f704..85a6e70 100644
+--- a/src/server/handlers/createTunnel.ts
++++ b/src/server/handlers/createTunnel.ts
+@@ -4,6 +4,7 @@ import { resolveHostnames } from '#src/server/utils/dns.ts'
+ import { matchesHostPattern } from '#src/server/utils/generics.ts'
+ import type { RPCHandler, Tunnel } from '#src/types/index.ts'
+ import { AttestorError } from '#src/utils/index.ts'
++import { safeErrorCode } from '#src/utils/logger.ts'
+ 
+ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 	{ id, ...opts },
+@@ -25,10 +26,6 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 	const apm = getApm()
+ 	const sessionTx = apm
+ 		?.startTransaction('tunnelConnection', { childOf: tx })
+-	sessionTx?.setLabel('tunnelId', id.toString())
+-	sessionTx?.setLabel('hostPort', `${opts.host}:${opts.port}`)
+-	sessionTx?.setLabel('geoLocation', opts.geoLocation)
+-	sessionTx?.setLabel('proxySessionId', opts.proxySessionId)
+ 
+ 	try {
+ 		const tunnel = await makeTcpTunnel({
+@@ -56,7 +53,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 				cancelBgp?.()
+ 
+ 				if(err) {
+-					apm?.captureError(err, { parent: sessionTx })
++					sessionTx?.setLabel('errorCode', safeErrorCode(err))
+ 					sessionTx?.setOutcome('failure')
+ 				} else {
+ 					sessionTx?.setOutcome('success')
+@@ -111,7 +108,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 
+ 		return {}
+ 	} catch(err) {
+-		apm?.captureError(err, { parent: sessionTx })
++		sessionTx?.setLabel('errorCode', safeErrorCode(err))
+ 		sessionTx?.setOutcome('failure')
+ 		sessionTx?.end()
+ 		cancelBgp?.()
+@@ -134,7 +131,7 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 				'BGP announcement overlap detected'
+ 			)
+ 			// track how many times we've seen a BGP overlap
+-			sessionTx?.addLabels({ bgpOverlap: true, ...info })
++			sessionTx?.addLabels({ bgpOverlap: true })
+ 
+ 			void tunnel?.close(
+ 				new AttestorError(
+@@ -146,4 +143,4 @@ export const createTunnel: RPCHandler<'createTunnel'> = async(
+ 
+ 		logger.debug({ ips }, 'checking for BGP overlap')
+ 	}
+-}
+\ No newline at end of file
++}
+diff --git a/src/server/socket.ts b/src/server/socket.ts
+index 3e48464..8c2ff4a 100644
+--- a/src/server/socket.ts
++++ b/src/server/socket.ts
+@@ -1,3 +1,4 @@
++import { randomUUID } from 'node:crypto'
+ import { promisify } from 'util'
+ import type { WebSocket as WS } from 'ws'
+ 
+@@ -11,6 +12,7 @@ import { getInitialMessagesFromQuery } from '#src/server/utils/generics.ts'
+ import type { AcceptNewConnectionOpts, BGPListener, IAttestorServerSocket, Logger, RPCEvent, RPCHandler } from '#src/types/index.ts'
+ import { AttestorError, generateSessionId } from '#src/utils/index.ts'
+ import { AttestorSocket } from '#src/utils/socket-base.ts'
++import { createServerLogRef, safeErrorCode, safeHandler, safeRpcStage } from '#src/utils/logger.ts'
+ 
+ export class AttestorServerSocket extends AttestorSocket implements IAttestorServerSocket {
+ 
+@@ -83,8 +85,11 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 		if(this.authSession) throw AttestorError.badRequest('Auth session already set')
+ 		this.authSession = new AuthSession(
+ 			data,
+-			() => void this.terminateConnection(authExpiredError())
+-				.catch(err => this.logger.error({ err }, 'failed to terminate expired auth session'))
++			() => {
++				this.logger.warn('auth expired')
++				void this.terminateConnection(authExpiredError())
++					.catch(err => this.logger.error({ err }, 'failed to terminate expired auth session'))
++			}
+ 		)
+ 		this.assertAuthActive()
+ 	}
+@@ -129,7 +134,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 		socket.send = promisify(bindSend)
+ 
+ 		const sessionId = generateSessionId()
+-		logger = logger.child({ sessionId })
++		logger = logger.child({ connectionRef: createServerLogRef(randomUUID) })
+ 
+ 		const client = new AttestorServerSocket(
+ 			socket, sessionId, bgpListener, logger
+@@ -179,20 +184,15 @@ async function handleRpcRequest(
+ 	this: IAttestorServerSocket,
+ 	{ data: { data, requestId, respond, type } }: RPCEvent<'rpc-request'>
+ ) {
+-	const logger = this.logger.child({ rpc: type, requestId })
++	const logger = this.logger.child({ handler: safeHandler(type), operationRef: createServerLogRef(randomUUID) })
++	const startedAt = Date.now()
+ 
+ 	const apm = getApm()
+-	const tx = apm?.startTransaction(type)
+-	tx?.setLabel('requestId', requestId)
+-	tx?.setLabel('sessionId', this.sessionId.toString())
+-
+-	const userId = this.authIdentity
+-	if(userId) {
+-		tx?.setLabel('authUserId', userId)
+-	}
++	const tx = apm?.startTransaction('rpc')
++	tx?.setLabel('stage', safeRpcStage(type))
+ 
+ 	const timeout = setTimeout(() => {
+-		logger.warn({ type, requestId }, 'RPC took too long to respond')
++		logger.warn('RPC took too long to respond')
+ 	}, DEFAULT_RPC_TIMEOUT_MS)
+ 
+ 	try {
+@@ -205,10 +205,13 @@ async function handleRpcRequest(
+ 		// Observe send failures when expiry suppresses a response.
+ 		await respond(res)
+ 
+-		logger.debug({ res }, 'handled RPC request')
++		logger.info({ durationMs: Date.now() - startedAt }, 'handled RPC request')
+ 		tx?.setOutcome('success')
+ 	} catch(err) {
+-		logger.error({ err }, 'error in RPC request')
++		logger.error({ err, durationMs: Date.now() - startedAt }, 'error in RPC request')
++		if(type === 'createTunnel') logger.error({ err }, 'tunnel request failed')
++		if(type === 'claimTunnel') logger.error({ err }, 'claim tunnel failed')
++		if(type === 'claimTeeBundle') logger.error({ err }, 'claim handler failed')
+ 		try {
+ 			await respond(AttestorError.fromError(err))
+ 		} catch(sendErr) {
+@@ -218,7 +221,7 @@ async function handleRpcRequest(
+ 		}
+ 		tx?.setOutcome('failure')
+ 
+-		apm?.captureError(err, { parent: tx })
++		tx?.setLabel('errorCode', safeErrorCode(err))
+ 	} finally {
+ 		clearTimeout(timeout)
+ 		tx?.end()
+diff --git a/src/server/utils/apm.ts b/src/server/utils/apm.ts
+index 44fcecb..cd83821 100644
+--- a/src/server/utils/apm.ts
++++ b/src/server/utils/apm.ts
+@@ -5,6 +5,16 @@ import { getEnvVariable } from '#src/utils/env.ts'
+ import { logger } from '#src/utils/logger.ts'
+ 
+ let apm: Agent | undefined
++let warnedUnsafeConfig = false
++const SAFE_APM_ENV_OVERRIDES = {
++	ELASTIC_APM_CAPTURE_BODY: 'off',
++	ELASTIC_APM_CAPTURE_ERROR_LOG_STACK_TRACES: 'messages',
++	ELASTIC_APM_CAPTURE_EXCEPTIONS: 'false',
++	ELASTIC_APM_CAPTURE_HEADERS: 'false',
++	ELASTIC_APM_CENTRAL_CONFIG: 'false',
++	ELASTIC_APM_INSTRUMENT: 'false',
++	ELASTIC_APM_INSTRUMENT_INCOMING_HTTP_REQUESTS: 'false'
++} as const
+ 
+ /**
+  * Initialises the APM agent if required,
+@@ -28,6 +38,17 @@ export function getApm(): Agent | undefined {
+ 	}
+ 
+ 	if(!apm) {
++		// Elastic APM environment settings override start() options, so reject unsafe capture before starting it.
++		const unsafeOverride = Object.entries(SAFE_APM_ENV_OVERRIDES)
++			.some(([name, safeValue]) => {
++				const value = getEnvVariable(name)
++				return value !== undefined && value !== safeValue
++			})
++		if(unsafeOverride) {
++			if(!warnedUnsafeConfig) logger.warn('APM configuration rejected')
++			warnedUnsafeConfig = true
++			return undefined
++		}
+ 		const sampleRate = +(
+ 			getEnvVariable('ELASTIC_APM_SAMPLE_RATE')
+ 			|| '0.1'
+@@ -36,14 +57,16 @@ export function getApm(): Agent | undefined {
+ 			serviceName: 'reclaim_attestor',
+ 			serviceVersion: '4.0.0',
+ 			transactionSampleRate: sampleRate,
+-			instrumentIncomingHTTPRequests: true,
+-			usePathAsTransactionName: true,
+-			instrument: true,
+-			captureHeaders: true,
++			instrumentIncomingHTTPRequests: false,
++			instrument: false,
++			captureHeaders: false,
++			captureBody: 'off',
++			captureExceptions: false,
++			captureErrorLogStackTraces: 'messages',
++			centralConfig: false,
+ 		})
+ 		logger.info('initialised APM agent')
+ 	}
+ 
+ 	return apm
+ }
+-
+diff --git a/src/tests/apm-log-privacy.test.ts b/src/tests/apm-log-privacy.test.ts
+new file mode 100644
+index 0000000..14d05b7
+--- /dev/null
++++ b/src/tests/apm-log-privacy.test.ts
+@@ -0,0 +1,75 @@
++import assert from 'node:assert/strict'
++import { Writable } from 'node:stream'
++import { it } from 'node:test'
++
++import { getApm } from '#src/server/utils/apm.ts'
++import { makeLogger } from '#src/utils/logger.ts'
++
++it('keeps actual APM manual telemetry without an uncaught-error capture handler', async() => {
++	const safeEnv = {
++		ELASTIC_APM_SERVER_URL: 'http://127.0.0.1:1',
++		ELASTIC_APM_SECRET_TOKEN: 'synthetic-test-token',
++		ELASTIC_APM_SAMPLE_RATE: '1',
++		ELASTIC_APM_CAPTURE_BODY: 'off',
++		ELASTIC_APM_CAPTURE_ERROR_LOG_STACK_TRACES: 'messages',
++		ELASTIC_APM_CAPTURE_EXCEPTIONS: 'false',
++		ELASTIC_APM_CAPTURE_HEADERS: 'false',
++		ELASTIC_APM_CENTRAL_CONFIG: 'false',
++		ELASTIC_APM_INSTRUMENT: 'false',
++		ELASTIC_APM_INSTRUMENT_INCOMING_HTTP_REQUESTS: 'false'
++	}
++	const unsafeEnv = {
++		ELASTIC_APM_CAPTURE_BODY: 'all',
++		ELASTIC_APM_CAPTURE_ERROR_LOG_STACK_TRACES: 'always',
++		ELASTIC_APM_CAPTURE_EXCEPTIONS: 'true',
++		ELASTIC_APM_CAPTURE_HEADERS: 'true',
++		ELASTIC_APM_CENTRAL_CONFIG: 'true',
++		ELASTIC_APM_INSTRUMENT: 'true',
++		ELASTIC_APM_INSTRUMENT_INCOMING_HTTP_REQUESTS: 'true'
++	}
++	const names = Object.keys(safeEnv)
++	const previous = Object.fromEntries(names.map(name => [name, process.env[name]]))
++	const beforeListeners = process.listeners('uncaughtException')
++	const lines: string[] = []
++	makeLogger(false, 'info', undefined, new Writable({ write(chunk, _encoding, done) { lines.push(chunk.toString()); done() } }))
++	for(const [name, value] of Object.entries(safeEnv)) process.env[name] = value
++	let agent: ReturnType<typeof getApm> | undefined
++	try {
++		for(const [name, value] of Object.entries(unsafeEnv)) {
++			process.env[name] = value
++			assert.equal(getApm(), undefined)
++			assert.deepEqual(process.listeners('uncaughtException'), beforeListeners)
++			process.env[name] = safeEnv[name as keyof typeof safeEnv]
++		}
++		const rejected = lines.map(line => JSON.parse(line) as Record<string, unknown>)
++		assert.ok(rejected.some(record => record.stage === 'connection' && record.outcome === 'failure'))
++		assert.ok(rejected.every(record => record.msg === 'attestor diagnostic'))
++		agent = getApm()
++		assert.ok(agent)
++		const active = agent as typeof agent & { _conf: Record<string, unknown>, _uncaughtExceptionListener: unknown }
++		assert.equal(active._conf.captureExceptions, false)
++		assert.equal(active._conf.captureErrorLogStackTraces, 'messages')
++		assert.equal(active._conf.captureHeaders, false)
++		assert.equal(active._conf.captureBody, 'off')
++		assert.equal(active._conf.centralConfig, false)
++		assert.equal(active._conf.instrument, false)
++		assert.equal(active._conf.instrumentIncomingHTTPRequests, false)
++		assert.equal(active._uncaughtExceptionListener, null)
++		assert.deepEqual(process.listeners('uncaughtException'), beforeListeners)
++		const tx = agent.startTransaction('rpc')
++		assert.ok(tx)
++		assert.equal(tx.setLabel('stage', 'rpc'), true)
++		assert.equal(tx.setLabel('errorCode', 'INTERNAL_ERROR'), true)
++		assert.deepEqual((tx as typeof tx & { _labels: Record<string, unknown> })._labels, { stage: 'rpc', errorCode: 'INTERNAL_ERROR' })
++		tx.setOutcome('failure')
++		tx.end()
++	} finally {
++		await agent?.destroy()
++		makeLogger(false, 'info')
++		for(const name of names) {
++			const value = previous[name]
++			if(value === undefined) delete process.env[name]
++			else process.env[name] = value
++		}
++	}
++})
+diff --git a/src/tests/log-privacy.test.ts b/src/tests/log-privacy.test.ts
+new file mode 100644
+index 0000000..430dfd9
+--- /dev/null
++++ b/src/tests/log-privacy.test.ts
+@@ -0,0 +1,221 @@
++import assert from 'node:assert/strict'
++import { randomUUID } from 'node:crypto'
++import { Writable } from 'node:stream'
++import { setTimeout as delay } from 'node:timers/promises'
++import { it, mock } from 'node:test'
++import { Wallet } from 'ethers'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++process.env.DISABLE_BGP_CHECKS = '1'
++
++const canaries = {
++	auth: 'CANARY_AUTH_PRIVATE', requestId: 'CANARY_REQUEST_PRIVATE',
++	host: 'CANARY_HOST_PRIVATE', headers: 'CANARY_COOKIE_PRIVATE',
++	proof: 'CANARY_PROOF_PRIVATE', account: 'CANARY_ACCOUNT_PRIVATE',
++	error: 'CANARY_ERROR_PRIVATE', key: 'CANARY_KEY_PRIVATE'
++}
++const claimInfo = {
++	provider: 'http', parameters: JSON.stringify({ secret: canaries.account }),
++	context: JSON.stringify({ proof: canaries.proof }), owner: canaries.account,
++	timestampS: Math.floor(Date.now() / 1000)
++}
++let failTunnel = false
++let failTee = false
++const nestedError = Object.assign(new Error(canaries.error), {
++	cause: { message: canaries.key, headers: { cookie: canaries.headers }, nested: new Error(canaries.proof) }
++})
++
++mock.module('#src/server/utils/assert-valid-claim-request.ts', {
++	namedExports: {
++		assertTranscriptsMatch() {},
++		async assertValidClaimRequest() {
++			if(failTunnel) throw nestedError
++			return { ...claimInfo }
++		},
++		async assertValidProviderTranscript() {
++			if(failTee) throw nestedError
++			return { ...claimInfo }
++		}
++	}
++})
++mock.module('#src/server/utils/tee-verification.ts', {
++	namedExports: {
++		async verifyTeeBundle() {
++			return { kOutputPayload: { timestampMs: claimInfo.timestampS * 1000 }, tOutputPayload: {} }
++		}
++	}
++})
++mock.module('#src/server/utils/tee-transcript-reconstruction.ts', {
++	namedExports: {
++		async reconstructTlsTranscript() {
++			return { revealedRequest: new Uint8Array(), reconstructedResponse: new Uint8Array() }
++		}
++	}
++})
++
++const [loggerModule, { AttestorClient }, { WS_PATHNAME }, { createServer }, { getRandomPort }, { createAuthRequest }, { claimTunnel }, { claimTeeBundle }, proto] = await Promise.all([
++	import('#src/utils/logger.ts'),
++	import('#src/client/utils/client-socket.ts'),
++	import('#src/config/index.ts'),
++	import('#src/server/create-server.ts'),
++	import('#src/tests/utils.ts'),
++	import('#src/utils/auth.ts'),
++	import('#src/server/handlers/claimTunnel.ts'),
++	import('#src/server/handlers/claimTeeBundle.ts'),
++	import('#src/proto/api.ts')
++])
++
++function capture(level: 'info' | 'debug' | 'trace') {
++	const lines: string[] = []
++	const stream = new Writable({ write(chunk, _encoding, done) { lines.push(chunk.toString()); done() } })
++	const logger = loggerModule.makeLogger(false, level, undefined, stream)
++	return { logger, lines }
++}
++
++function assertPrivateLogs(lines: string[]) {
++	const raw = lines.join('')
++	for(const canary of Object.values(canaries)) assert.ok(!raw.includes(canary), 'synthetic secret reached a log')
++	const allowed = new Set(['level', 'time', 'connectionRef', 'operationRef', 'handler', 'stage', 'outcome', 'errorCode', 'durationMs', 'msg'])
++	const records = lines.map(line => { const keys = [...line.matchAll(/"([A-Za-z][A-Za-z0-9]*)":/g)].map(match => match[1]); assert.equal(new Set(keys).size, keys.length, 'duplicate JSON key in log line'); return JSON.parse(line) as Record<string, unknown> })
++	for(const record of records) {
++		assert.ok(Object.keys(record).every(key => allowed.has(key)))
++		assert.equal(record.msg, 'attestor diagnostic')
++		if(record.connectionRef) assert.match(String(record.connectionRef), /^[0-9a-f-]{36}$/)
++		if(record.operationRef) assert.match(String(record.operationRef), /^[0-9a-f-]{36}$/)
++	}
++	return records
++}
++
++for(const level of ['info', 'debug'] as const) {
++	it(`keeps ${level} actual init, tunnel, claims, signing and delivery logs categorical`, async() => {
++		const { logger, lines } = capture(level)
++		const key = Wallet.createRandom()
++		process.env.AUTHENTICATION_PUBLIC_KEY = key.publicKey
++		const port = getRandomPort()
++		const server = await createServer(port)
++		const url = `ws://127.0.0.1:${port}${WS_PATHNAME}`
++		let client: InstanceType<typeof AttestorClient> | undefined
++		try {
++			const missing = new AttestorClient({ url })
++			await assert.rejects(missing.waitForInit(), (err: any) => err.code === 'ERROR_AUTHENTICATION_FAILED')
++			const wrong = await createAuthRequest({ id: canaries.auth, hostWhitelist: [canaries.host] }, Wallet.createRandom().privateKey)
++			const invalid = new AttestorClient({ url, authRequest: wrong })
++			await assert.rejects(invalid.waitForInit(), (err: any) => err.code === 'ERROR_AUTHENTICATION_FAILED')
++
++			const expiresAt = Math.floor(Date.now() / 1000) + 3
++			const auth = await createAuthRequest({ id: canaries.auth, hostWhitelist: ['example.com'], expiresAt }, key.privateKey)
++			client = new AttestorClient({ url, authRequest: auth })
++			await client.waitForInit()
++			const ws = [...server.clients].find(socket => (socket as any).serverSocket?.authIdentity === canaries.auth)!
++			const socket = (ws as any).serverSocket
++			const rpc = (type: string, data: unknown) => new Promise<any>(resolve =>
++				socket.dispatchRPCEvent('rpc-request', { type, data, requestId: canaries.requestId, respond: resolve }))
++			const tunnelError = await rpc('createTunnel', { id: 7, host: canaries.host, port: 443 })
++			assert.equal(tunnelError.code, 'ERROR_BAD_REQUEST')
++
++			const request = proto.ClaimTunnelRequest.create({ request: { id: 1, host: 'example.com', port: 443 }, data: { timestampS: claimInfo.timestampS } })
++			const handlerLogger = logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID), operationRef: loggerModule.createServerLogRef(randomUUID), handler: 'claimTunnel', userId: canaries.auth, requestId: canaries.requestId })
++			const handlerClient = {
++				metadata: { signatureType: proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
++				assertAuthActive() {},
++				getTunnel() { return { createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '' }, transcript: [], async close() {} } },
++				removeTunnel() {}
++			}
++			const context = { logger: handlerLogger, client: handlerClient } as any
++			const successTunnel = await claimTunnel(request, context)
++			assert.ok(successTunnel.signatures?.claimSignature.length)
++			failTunnel = true
++			const beforeFailedClaim = lines.length
++			const failedTunnel = await claimTunnel(request, context)
++			assert.equal(failedTunnel.error?.code, proto.ErrorCode.ERROR_INVALID_CLAIM)
++			const rejectedRecords = assertPrivateLogs(lines.slice(beforeFailedClaim))
++			const claimOutcomes = rejectedRecords.filter(item => item.stage === 'claimTunnel').map(item => item.outcome)
++			assert.ok(claimOutcomes.length > 0)
++			assert.ok(claimOutcomes.every(outcome => outcome === 'failure'))
++			failTunnel = false
++
++			const teeLogger = logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID), operationRef: loggerModule.createServerLogRef(randomUUID), handler: 'claimTeeBundle' })
++			const teeContext = { logger: teeLogger, client: handlerClient } as any
++			const teeRequest = proto.ClaimTeeBundleRequest.create({ verificationBundle: new Uint8Array(), data: { ...claimInfo } })
++			const successTee = await claimTeeBundle(teeRequest, teeContext)
++			assert.ok(successTee.signatures?.claimSignature.length)
++			failTee = true
++			await assert.rejects(claimTeeBundle(teeRequest, teeContext), err => err === nestedError)
++			failTee = false
++
++			logger.child({ userId: canaries.auth, hostname: canaries.host, requestId: canaries.requestId }).error({
++				err: nestedError, headers: { cookie: canaries.headers }, privateKey: canaries.key,
++				proof: canaries.proof, claim: claimInfo
++			}, `untrusted ${canaries.error}`)
++			logger.error(nestedError, canaries.error)
++			while(Date.now() <= expiresAt * 1000 + 100) await delay(25)
++			const records = assertPrivateLogs(lines)
++			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'failure' && item.errorCode === 'ERROR_AUTHENTICATION_FAILED'))
++			assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'expired'))
++			assert.ok(records.some(item => item.stage === 'tunnel' && item.outcome === 'failure'))
++			for(const stage of ['claimTunnel', 'claimTeeBundle']) {
++				assert.ok(records.some(item => item.stage === stage && item.outcome === 'success'))
++				assert.ok(records.some(item => item.stage === stage && item.outcome === 'failure'))
++			}
++			assert.ok(records.some(item => item.stage === 'rpc' && typeof item.durationMs === 'number'))
++			assert.ok(records.some(item => item.stage === 'rpc' && item.outcome === 'failure' && item.errorCode === 'INTERNAL_ERROR'))
++			assert.ok(records.filter(item => item.outcome === 'started' || item.outcome === 'success').every(item => item.errorCode === undefined))
++			assert.ok(records.some(item => item.connectionRef && item.operationRef))
++		} finally {
++			failTunnel = false
++			failTee = false
++			await client?.terminateConnection()
++			await new Promise<void>(resolve => server.close(() => resolve()))
++			delete process.env.AUTHENTICATION_PUBLIC_KEY
++			loggerModule.makeLogger(false, 'info')
++		}
++	})
++}
++
++it('sanitizes outgoing trace and throwing log values without changing the caller result', () => {
++	const { logger, lines } = capture('trace')
++	const forgedRef = randomUUID()
++	const missingRef = loggerModule.createServerLogRef(() => { throw nestedError })
++	assert.equal(missingRef, undefined)
++	assert.equal(loggerModule.createServerLogRef(() => canaries.auth), undefined)
++	logger.child({ connectionRef: missingRef }).warn('auth expired')
++	const child = logger.child({ connectionRef: forgedRef, authId: canaries.auth })
++	logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID) }).child({ handler: 'claimTunnel' }).trace({ msg: { headers: { cookie: canaries.headers }, proof: canaries.proof } }, 'sending messages')
++	child.error({ stage: 'claimTunnel', outcome: 'success', errorCode: 'ERROR_NO_ERROR', err: nestedError }, canaries.error)
++	const spoofRecord = JSON.parse(lines.at(-1)!) as Record<string, unknown>
++	assert.equal(spoofRecord.stage, 'rpc')
++	assert.equal(spoofRecord.outcome, 'failure')
++	assert.equal(spoofRecord.errorCode, 'INTERNAL_ERROR')
++	const throwing = new Proxy({}, { get() { throw new Error(canaries.error) } })
++	assert.doesNotThrow(() => child.error(throwing, canaries.error))
++	const records = assertPrivateLogs(lines)
++	assert.ok(records.some(item => item.stage === 'init' && item.outcome === 'expired' && item.connectionRef === undefined))
++	assert.ok(!lines.join('').includes(forgedRef), 'client-shaped correlation reference reached a log')
++	loggerModule.makeLogger(false, 'info')
++})
++
++it('keeps non-auth pre-init send failures finite in actual Pino info and debug logs', async() => {
++	const { handleMessage } = await import('#src/client/utils/message-handler.ts')
++	for(const level of ['info', 'debug'] as const) {
++		const { logger, lines } = capture(level)
++		let sends = 0
++		try {
++			const socket = {
++				logger: logger.child({ sessionId: canaries.auth, hostname: canaries.host }),
++				isInitialised: false,
++				async sendMessage() { sends++; throw nestedError },
++				dispatchRPCEvent() { throw new Error('pre-init request reached a handler') }
++			} as any
++			const request = proto.RPCMessage.create({ id: canaries.requestId, createTunnelRequest: { id: 1, host: canaries.host, port: 443 } })
++			assert.equal(handleMessage.call(socket, request), undefined)
++			await delay(0)
++			assert.equal(sends, 1)
++			const records = assertPrivateLogs(lines)
++			assert.equal(records.length, 2)
++			assert.ok(records.every(item => item.stage === 'rpc' && item.outcome === 'failure'))
++		} finally {
++			loggerModule.makeLogger(false, 'info')
++		}
++	}
++})
+diff --git a/src/utils/logger.ts b/src/utils/logger.ts
+index 79ccba0..66bdba2 100644
+--- a/src/utils/logger.ts
++++ b/src/utils/logger.ts
+@@ -1,37 +1,117 @@
+-import { type LoggerOptions, pino, stdTimeFunctions } from 'pino'
++import { type Bindings, type ChildLoggerOptions, type DestinationStream, type Logger as PinoLogger, type LoggerOptions, pino, stdTimeFunctions } from 'pino'
+ 
+ import type { LogLevel } from '#src/types/index.ts'
++import { ErrorCode } from '#src/proto/api.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++const STAGES = ['connection', 'init', 'rpc', 'tunnel', 'claimTunnel', 'claimTeeBundle', 'provider', 'tee'] as const
++const OUTCOMES = ['started', 'success', 'failure', 'timeout', 'expired'] as const
++const HANDLERS = ['claimTunnel', 'claimTeeBundle'] as const
++type Stage = typeof STAGES[number]
++type Outcome = typeof OUTCOMES[number]
++type Handler = typeof HANDLERS[number]
++type SafeErrorCode = keyof typeof ErrorCode | 'INTERNAL_ERROR'
++type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode }
++const EVENTS: Record<string, { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode }> = {
++	'new connection, validating...': { stage: 'connection', outcome: 'started' },
++	'connection accepted': { stage: 'connection', outcome: 'success' },
++	'error in new connection': { stage: 'init', outcome: 'failure' },
++	'auth expired': { stage: 'init', outcome: 'expired', errorCode: 'ERROR_AUTHENTICATION_FAILED' },
++	'handling RPC request': { stage: 'rpc', outcome: 'started' },
++	'handled RPC request': { stage: 'rpc', outcome: 'success' },
++	'error in RPC request': { stage: 'rpc', outcome: 'failure' },
++	'RPC took too long to respond': { stage: 'rpc', outcome: 'timeout' },
++	'failed to deliver RPC error response': { stage: 'rpc', outcome: 'failure' },
++	'error processing message': { stage: 'rpc', outcome: 'failure' },
++	'error writing to tunnel': { stage: 'tunnel', outcome: 'failure' },
++	'tunnel request failed': { stage: 'tunnel', outcome: 'failure' },
++	'failed to forward tunnel message': { stage: 'tunnel', outcome: 'failure' },
++	'failed to send tunnel disconnect event': { stage: 'tunnel', outcome: 'failure' },
++	'error closing tunnel': { stage: 'tunnel', outcome: 'failure' },
++	'invalid claim request': { stage: 'claimTunnel', outcome: 'failure' },
++	'claim tunnel rejected': { stage: 'claimTunnel', outcome: 'failure' },
++	'claim tunnel completed': { stage: 'claimTunnel', outcome: 'success' },
++	'claim tunnel failed': { stage: 'claimTunnel', outcome: 'failure' },
++	'claim handler failed': { stage: 'claimTeeBundle', outcome: 'failure' },
++	'Starting TEE bundle verification': { stage: 'claimTeeBundle', outcome: 'started' },
++	'TEE bundle claim validation successful': { stage: 'claimTeeBundle', outcome: 'success' },
++	'TEE bundle claim processing completed': { stage: 'claimTeeBundle', outcome: 'success' },
++	'TEE provider validation completed successfully': { stage: 'provider', outcome: 'success' },
++	'initialised APM agent': { stage: 'connection', outcome: 'success' },
++	'APM configuration rejected': { stage: 'connection', outcome: 'failure' }
++}
++const MAX_DURATION_MS = 86_400_000
++const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
++const serverRefs = new WeakSet<object>()
++
++export function createServerLogRef(generate: () => string): Readonly<{ value: string }> | undefined {
++	// Server callers supply the Node CSPRNG; failed logging correlation is optional.
++	try {
++		const value = generate()
++		if(!UUID_V4.test(value)) return undefined
++		const ref = Object.freeze({ value })
++		serverRefs.add(ref)
++		return ref
++	} catch {
++		return undefined
++	}
++}
+ 
+-const PII_PROPERTIES = ['ownerPrivateKey', 'secretParams']
+-const redactedText = '[REDACTED]'
+-const envLevel = getEnvVariable('LOG_LEVEL') as LogLevel
++export function safeRpcStage(type: unknown): Stage {
++	if(type === 'init') return 'init'
++	if(type === 'createTunnel' || type === 'disconnectTunnel') return 'tunnel'
++	if(type === 'claimTunnel' || type === 'claimTeeBundle') return type
++	return 'rpc'
++}
++
++export function safeHandler(type: unknown): Handler | undefined {
++	return type === 'claimTunnel' || type === 'claimTeeBundle' ? type : undefined
++}
+ 
+-export let logger = pino()
++export function safeErrorCode(error: unknown): SafeErrorCode {
++	return error instanceof AttestorError && error.code !== 'ERROR_NO_ERROR' && Object.hasOwn(ErrorCode, error.code)
++		? error.code
++		: 'INTERNAL_ERROR'
++}
+ 
++const envLevel = getEnvVariable('LOG_LEVEL') as LogLevel
++export let logger: PinoLogger
+ makeLogger(false, envLevel)
+ 
+-/**
+- * Creates a logger instance with optional redaction of PII.
+- * Replaces default logger
+- * See PII_PROPERTIES for the list of properties that will be redacted.
+- *
+- * @param redactPii - whether to redact PII from logs
+- * @param level - the log level to use
+- * @param onLog - a callback to call when a log is written
+- */
++// Client data and nested errors reach both log calls and child bindings.
+ export function makeLogger(
+ 	redactPii: boolean,
+ 	level?: LogLevel,
+-	onLog?: (level: LogLevel, log: any) => void
++	onLog?: (level: LogLevel, log: any) => void,
++	stream?: DestinationStream
+ ) {
+ 	const opts: LoggerOptions = {
+-		// Log human readable time stamps instead of epoch time
+ 		timestamp: stdTimeFunctions.isoTime,
++		formatters: {
++			bindings(bindings) {
++				return projectContext(bindings)
++			},
++			log: redact
++		},
++		hooks: {
++			logMethod(args, method, levelNumber) {
++				try {
++					const message = args.find(arg => typeof arg === 'string')
++					const details = args.find(arg => typeof arg === 'object' && arg !== null)
++					const evidence = projectEvidence(details)
++					const event: { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode } = typeof message === 'string' && Object.hasOwn(EVENTS, message)
++						? EVENTS[message]
++						: { stage: 'rpc', outcome: evidence.errorCode || levelNumber >= 40 ? 'failure' : 'started' }
++					if(event.outcome === 'success' || event.outcome === 'started') delete evidence.errorCode
++					method.apply(this, [{ ...evidence, ...event }, 'attestor diagnostic'])
++				} catch {
++					// Logging must not change the result of an attestor operation.
++				}
++			}
++		}
+ 	}
+ 	if(redactPii) {
+-		opts.formatters = { log: redact }
+-		opts.serializers = { redact }
+ 		opts.browser = {
+ 			write: {
+ 				fatal: log => writeLog('fatal', log),
+@@ -39,76 +119,71 @@ export function makeLogger(
+ 				warn: log => writeLog('warn', log),
+ 				info: log => writeLog('info', log),
+ 				debug: log => writeLog('debug', log),
+-				trace: log => writeLog('trace', log),
++				trace: log => writeLog('trace', log)
+ 			}
+ 		}
+ 	}
+-
+-	const pLogger = pino(opts)
++	const pLogger = hardenChildren(stream ? pino(opts, stream) : pino(opts))
+ 	pLogger.level = level || 'info'
+-
+ 	logger = pLogger
+ 	return pLogger
+ 
+-	function writeLog(level: LogLevel, log: any) {
+-		log = redact(log)
+-		const { msg, ...obj } = log
+-		if(console[level]) {
+-			console[level](obj, msg)
+-		} else {
+-			console.log(obj, msg)
+-		}
+-
+-		onLog?.(level, log)
++	function writeLog(logLevel: LogLevel, log: any) {
++		const safe = redact(log)
++		if(console[logLevel]) console[logLevel](safe, 'attestor diagnostic')
++		else console.log(safe, 'attestor diagnostic')
++		onLog?.(logLevel, { ...safe, msg: 'attestor diagnostic' })
+ 	}
+ }
+ 
+-function isObjectProperty(property) {
+-	return (typeof property) === 'object'
+-		&& !Array.isArray(property)
+-		&& property !== null
++function hardenChildren(target: PinoLogger, inherited: Record<string, unknown> = {}): PinoLogger {
++	const createChild = target.child.bind(target)
++	target.child = ((bindings: Bindings, options?: ChildLoggerOptions) => {
++		const safe = { ...inherited, ...projectContext(bindings) }
++		return hardenChildren(createChild(projectContext(bindings), options), safe)
++	}) as PinoLogger['child']
++	return target
+ }
+ 
+-function getReplacer() {
+-	// Store references to previously visited objects
+-	const references = new WeakSet()
+-
+-	return function(key, value) {
+-		const isObject = (typeof value) === 'object' && value !== null
+-		if(isObject) {
+-			if(references.has(value)) {
+-				return '[CIRCULAR]'
+-			}
+-
+-			references.add(value)
+-		}
+-
+-		return value
++function projectContext(input: unknown): Record<string, unknown> {
++	if(!input || typeof input !== 'object') return {}
++	try {
++		const value = input as Record<string, unknown>
++		const safe: Record<string, unknown> = {}
++		if(typeof value.handler === 'string' && HANDLERS.includes(value.handler as Handler)) safe.handler = value.handler
++		if(value.connectionRef && typeof value.connectionRef === 'object' && serverRefs.has(value.connectionRef)) safe.connectionRef = (value.connectionRef as { value: string }).value
++		if(value.operationRef && typeof value.operationRef === 'object' && serverRefs.has(value.operationRef)) safe.operationRef = (value.operationRef as { value: string }).value
++		return safe
++	} catch {
++		return {}
+ 	}
+ }
+ 
+-export function redact(json) {
+-	const isObject = isObjectProperty(json)
+-
+-	if(!isObject && !Array.isArray(json)) {
+-		return json
++function projectEvidence(input: unknown): SafeEvidence {
++	if(input instanceof Error) return { errorCode: safeErrorCode(input) }
++	if(!input || typeof input !== 'object') return {}
++	try {
++		const value = input as Record<string, unknown>
++		const safe: SafeEvidence = {}
++		if(typeof value.durationMs === 'number' && Number.isSafeInteger(value.durationMs) && value.durationMs >= 0 && value.durationMs <= MAX_DURATION_MS) safe.durationMs = value.durationMs
++		const err = value.err ?? value.error
++		if(err !== undefined) safe.errorCode = safeErrorCode(err)
++		return safe
++	} catch {
++		return {}
+ 	}
++}
+ 
+-	const redacted = JSON.parse(JSON.stringify(json, getReplacer()))
+-
+-	for(const prop in redacted) {
+-		if(PII_PROPERTIES.includes(prop)) {
+-			redacted[prop] = redactedText
+-		}
+-
+-		if(Array.isArray(redacted[prop])) {
+-			for(const [index, value] of redacted[prop].entries()) {
+-				redacted[prop][index] = redact(value)
+-			}
+-		} else if(isObjectProperty(redacted[prop])) {
+-			redacted[prop] = redact(redacted[prop])
+-		}
++export function redact(input: unknown): Record<string, unknown> {
++	if(!input || typeof input !== 'object') return {}
++	try {
++		const value = input as Record<string, unknown>
++		const safe: Record<string, unknown> = { ...projectContext(input), ...projectEvidence(input) }
++		if(typeof value.stage === 'string' && STAGES.includes(value.stage as Stage)) safe.stage = value.stage
++		if(typeof value.outcome === 'string' && OUTCOMES.includes(value.outcome as Outcome)) safe.outcome = value.outcome
++		if(typeof value.errorCode === 'string' && (value.errorCode === 'INTERNAL_ERROR' || Object.hasOwn(ErrorCode, value.errorCode))) safe.errorCode = value.errorCode
++		return safe
++	} catch {
++		return {}
+ 	}
+-
+-	return redacted
+ }

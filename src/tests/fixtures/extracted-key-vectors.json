@@ -1,0 +1,14 @@
+{
+  "accepted": ["handle", "a", "account_id", "user2", "a00000000000000000000000000000000000000000000000000000000000000b"],
+  "rejected": [
+    "FIXTURE_HANDLE_SECRET",
+    "Handle",
+    "handleSecret",
+    "_handle",
+    "2handle",
+    "handle-id",
+    "handle.id",
+    "",
+    "a000000000000000000000000000000000000000000000000000000000000000c"
+  ]
+}

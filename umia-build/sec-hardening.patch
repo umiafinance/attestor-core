@@ -1,0 +1,3596 @@
+diff --git a/.dockerignore b/.dockerignore
+index 935e329..6c494ea 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -4,4 +4,6 @@ browser/resources
+ example-local
+ .github
+ docker-compose.yaml
+-attestor.dockerfile
+\ No newline at end of file
++attestor.dockerfile
++# Upstream test env files enable test-only knobs when NODE_ENV names them.
++.env*
+diff --git a/cert/secure-boot/R.crt.pem b/cert/secure-boot/R.crt.pem
+deleted file mode 100644
+index bc4029a..0000000
+--- a/cert/secure-boot/R.crt.pem
++++ /dev/null
+@@ -1,25 +0,0 @@
+------BEGIN CERTIFICATE-----
+-MIIENTCCAp2gAwIBAgIUR6UgQfAU1xpAIH8BW/+yrVvP/IswDQYJKoZIhvcNAQEL
+-BQAwKjEoMCYGA1UEAwwfUmVjbGFpbSBDcm9zcy1DbG91ZCBSZWxlYXNlIEtleTAe
+-Fw0yNjA4MjMxMTE3MTRaFw0zNjA4MjAxMTE3MTRaMCoxKDAmBgNVBAMMH1JlY2xh
+-aW0gQ3Jvc3MtQ2xvdWQgUmVsZWFzZSBLZXkwggGiMA0GCSqGSIb3DQEBAQUAA4IB
+-jwAwggGKAoIBgQCyTnBaJZ79sOURQ6C4ZdIJ26YhJa7CaKAXwDgtVMv1LNzwic+b
+-phhnlauwLt2OHCQlyoLyIFiv/nH2hzuQ8GrqrOT1Ers2/a1Qqm7QThd63dG97jZf
+-119TryANYQieOYiMrE9QP3MvQ+kgv/owPMcMAIZFUVMpLJ4YwYlyeGp/E2NNH+Xm
+-6T9kixyX/FO9ytodwlBnza7830v4w/HoVg/hiOUjp5ByTkQcnqTDmZorcSviSPKN
+-u4PeKMoZYl/tdEMvEJ3k9aBHndVzafouP9G0HWOxXi/key4r3g6omFi6i6DqsfQO
+-Y+kiznvAhBSHDPzNPxDPKNefCqmrZxXFSQwS9Duty6ElcX/3YO4TP8/lKJWAc4rr
+-XXB8lN+2h0c0hwCZEZNV1wQndWwNvd8P7E7UqV9yENaiqmhT30IDMYOoNEG5YnV9
+-upJvInE3L+cCC8oHTQudjKqXJU26xfZ1S/nmhdhABCknNJMw+qHTlYK9XO8UbYw2
+-ss57FExu+X6CCIkCAwEAAaNTMFEwHQYDVR0OBBYEFPYUQErqfWKKyIeQxWFjk2dr
+-HxKTMB8GA1UdIwQYMBaAFPYUQErqfWKKyIeQxWFjk2drHxKTMA8GA1UdEwEB/wQF
+-MAMBAf8wDQYJKoZIhvcNAQELBQADggGBAGak+a4HOiDzwyaP3JKZqZmD4NmOcMMT
+-5iRa+RwHZ179mMVPvnoJWilNYzS5AgkimBKKyer5mbtzbcLljtwwmkZwvvwlz9vZ
+-/em+ShRNTWyWYi2mzUokrnzKZb173KDADJ471907HmJwDarxyd2tZbGcizo13St4
+-n+2zHrq6TeTKLIgyuIG+vIdx9p3mdgCBe9B4OIxOLAJn9MaJabRAm3kaT3KC5xMq
+-dIVDunOPQppyb2SyP7l+Sxfn1cmxPAl7u3mMbZitqLmEOckC2mZtRu/zdtyhCWLA
+-bB8UJM8i6VmU1Vheo0cWQ8JU/I5Bj6roHegGkC1fWyEYrn0KDdJ2HmdUgE3P8n9T
+-9VuIz/KiJNrOZqGOqlyW19/TOdozkK2SdS0seZ7rOM+8V427747FW1VLBkVLS13B
+-eRLwFTi/NXRsnW66nMGCWpKmlqIinFHyahsZXRWyNGBJNcmzyzd9Ci86BzfcEfNK
+-NeXekuCpUove52LIxZHttJvFODhqTZR7pA==
+------END CERTIFICATE-----
+diff --git a/cert/secure-boot/R.pub.pem b/cert/secure-boot/R.pub.pem
+deleted file mode 100644
+index f329045..0000000
+--- a/cert/secure-boot/R.pub.pem
++++ /dev/null
+@@ -1,11 +0,0 @@
+------BEGIN PUBLIC KEY-----
+-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsk5wWiWe/bDlEUOguGXS
+-CdumISWuwmigF8A4LVTL9Szc8InPm6YYZ5WrsC7djhwkJcqC8iBYr/5x9oc7kPBq
+-6qzk9RK7Nv2tUKpu0E4Xet3Rve42X9dfU68gDWEInjmIjKxPUD9zL0PpIL/6MDzH
+-DACGRVFTKSyeGMGJcnhqfxNjTR/l5uk/ZIscl/xTvcraHcJQZ82u/N9L+MPx6FYP
+-4YjlI6eQck5EHJ6kw5maK3Er4kjyjbuD3ijKGWJf7XRDLxCd5PWgR53Vc2n6Lj/R
+-tB1jsV4v5HsuK94OqJhYuoug6rH0DmPpIs57wIQUhwz8zT8QzyjXnwqpq2cVxUkM
+-EvQ7rcuhJXF/92DuEz/P5SiVgHOK611wfJTftodHNIcAmRGTVdcEJ3VsDb3fD+xO
+-1KlfchDWoqpoU99CAzGDqDRBuWJ1fbqSbyJxNy/nAgvKB00LnYyqlyVNusX2dUv5
+-5oXYQAQpJzSTMPqh05WCvVzvFG2MNrLOexRMbvl+ggiJAgMBAAE=
+------END PUBLIC KEY-----
+diff --git a/package-lock.json b/package-lock.json
+index 5393ea7..efeaa6a 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "@reclaimprotocol/attestor-core",
+-  "version": "5.1.4",
++  "version": "5.1.5",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "@reclaimprotocol/attestor-core",
+-      "version": "5.1.4",
++      "version": "5.1.5",
+       "license": "AGPL-3.0-only",
+       "dependencies": {
+         "@bufbuild/protobuf": "^2.11.0",
+@@ -14,7 +14,7 @@
+         "@peculiar/webcrypto": "^1.5.0",
+         "@peculiar/x509": "^1.14.3",
+         "@reclaimprotocol/tls": "^0.1.4",
+-        "@reclaimprotocol/zk-symmetric-crypto": "^5.1.7",
++        "@reclaimprotocol/zk-symmetric-crypto": "5.1.7",
+         "ajv": "^8.18.0",
+         "bs58": "^6.0.0",
+         "canonicalize": "^2.1.0",
+diff --git a/package.json b/package.json
+index 62cbfd8..f5eb0fb 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@reclaimprotocol/attestor-core",
+-  "version": "5.1.4",
++  "version": "5.1.5",
+   "description": "",
+   "type": "module",
+   "imports": {
+@@ -93,7 +93,7 @@
+     "@peculiar/webcrypto": "^1.5.0",
+     "@peculiar/x509": "^1.14.3",
+     "@reclaimprotocol/tls": "^0.1.4",
+-    "@reclaimprotocol/zk-symmetric-crypto": "^5.1.7",
++    "@reclaimprotocol/zk-symmetric-crypto": "5.1.7",
+     "ajv": "^8.18.0",
+     "bs58": "^6.0.0",
+     "canonicalize": "^2.1.0",
+@@ -134,12 +134,12 @@
+     "eslint-plugin-no-relative-import-paths": "^1.6.1",
+     "event-target-shim": "^6.0.2",
+     "json-schema-to-typescript": "^15.0.4",
++    "re2": "^1.24.0",
+     "ts-jest": "^29.4.6",
+     "ts-proto": "^2.11.6",
+     "tsc-alias": "^1.8.17",
+     "typechain": "^8.3.2",
+     "typescript": "^5.9.3",
+-    "re2": "^1.24.0",
+     "whatwg-url": "^14.2.0",
+     "yaml": "^2.8.3"
+   },
+diff --git a/src/config/index.ts b/src/config/index.ts
+index 5101cd4..1be0c7a 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -54,14 +54,20 @@ export const DEFAULT_RPC_TIMEOUT_MS = 90_000
+ 
+ export const TOPRF_DOMAIN_SEPARATOR = 'reclaim-toprf'
+ 
+-export const MAX_CERT_SIZE_BYTES = 10 * 1024 * 1024 * 1024 // 10MB
+-
+-export const CERT_ALLOWED_MIMETYPES = [
+-	'application/x-x509-ca-cert',
+-	'application/x-x509-user-cert',
+-	'application/pkix-cert',
+-	'application/pkcs7-mime',
+-	'application/octet-stream'
+-]
++// The API mints auth for at most 15 min after createdAt; a longer signed lifetime is refused.
++export const MAX_AUTH_LIFETIME_S = 15 * 60
++
++export const MAX_AUTH_CLOCK_SKEW_S = 60
++
++export const INIT_TIMEOUT_MS = 5_000
++
++// The SDK opens one socket per proof; a replayed auth must not hold every connection slot.
++export const MAX_SOCKETS_PER_AUTH = 4
++
++// ws defaults to 100 MiB for every socket; before auth only a small init message is legitimate.
++export const MAX_PRE_AUTH_WS_PAYLOAD_BYTES = 64 * 1024
++
++// Measured stwo claimTunnel: 6-11 MB for 1-4 short reveals, about 19 KB more per revealed byte.
++export const MAX_AUTHENTICATED_WS_PAYLOAD_BYTES = 32 * 1024 * 1024
+ 
+ export const BGP_WS_URL = 'wss://ris-live.ripe.net/v1/ws/?client=reclaim-hijack-detector'
+diff --git a/src/providers/http/response-charset.ts b/src/providers/http/response-charset.ts
+deleted file mode 100644
+index 32e3b04..0000000
+--- a/src/providers/http/response-charset.ts
++++ /dev/null
+@@ -1,264 +0,0 @@
+-import { Tokenizer, TokenizerMode } from 'parse5'
+-
+-// Mirrors reclaim-tee's response-local HTML policy. This runs on authenticated,
+-// dechunked bytes; no charset supplied by a claimant is trusted.
+-export function detectResponseCharset(body: Uint8Array, contentType?: string, completeBody = true) {
+-	const header = /(?:^|;)\s*charset\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))/i.exec(contentType ?? '')
+-	const headerLabel = (header?.[1]?.replace(/\\(.)/g, '$1') ?? header?.[2])?.trim()
+-	if(contentType?.split(';', 1)[0].trim().toLowerCase() !== 'text/html') {
+-		return headerLabel || undefined
+-	}
+-
+-	for(const [signature, charset] of [
+-		[[0xef, 0xbb, 0xbf], 'utf-8'],
+-		[[0xff, 0xfe], 'utf-16le'],
+-		[[0xfe, 0xff], 'utf-16be'],
+-	] as const) {
+-		if(signature.every((byte, i) => body[i] === byte)) {
+-			return charset
+-		}
+-	}
+-	const fromHeader = supportedCharset(htmlHeaderCharset(contentType))
+-	if(fromHeader) {
+-		return fromHeader
+-	}
+-	for(const [signature, charset] of [
+-		[[0x3c, 0, 0x3f, 0, 0x78, 0], 'utf-16le'],
+-		[[0, 0x3c, 0, 0x3f, 0, 0x78], 'utf-16be'],
+-	] as const) {
+-		if(signature.every((byte, i) => body[i] === byte)) {
+-			return charset
+-		}
+-	}
+-
+-	// Only ASCII markup is inspected here. Latin-1 keeps one character per
+-	// original byte; actual body decoding happens after charset selection.
+-	let raw = ''
+-	for(let i = 0; i < body.length; i += 8192) {
+-		raw += String.fromCharCode(...body.subarray(i, i + 8192))
+-	}
+-	const fromMeta = scanMeta(raw)
+-	if(fromMeta) {
+-		return fromMeta
+-	}
+-	if(!completeBody) { return undefined }
+-	const fromXml = scanXml(raw)
+-	if(fromXml) {
+-		return fromXml
+-	}
+-	try {
+-		new TextDecoder('utf-8', { fatal: true }).decode(body)
+-		return 'utf-8'
+-	} catch {
+-		throw new Error('Cannot determine HTML response charset: no supported declaration and body is not valid UTF-8')
+-	}
+-}
+-
+-function supportedCharset(label?: string) {
+-	if(!label) {
+-		return undefined
+-	}
+-	// WHATWG meta declarations map this legacy label to Windows-1252.
+-	if(label.replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, '').toLowerCase() === 'x-user-defined') {
+-		return 'x-user-defined'
+-	}
+-	try {
+-		return new TextDecoder(label).encoding
+-	} catch {
+-		return undefined
+-	}
+-}
+-
+-function metaContentCharset(content: string) {
+-	const text = content.toLowerCase()
+-	let offset = 0
+-	while(offset < text.length) {
+-		const start = text.indexOf('charset', offset)
+-		if(start < 0) {
+-			break
+-		}
+-		offset = start + 7
+-		while(' \t\n\f\r'.includes(text[offset] ?? '\0')) {
+-			offset++
+-		}
+-		if(text[offset++] !== '=') {
+-			continue
+-		}
+-		while(' \t\n\f\r'.includes(text[offset] ?? '\0')) {
+-			offset++
+-		}
+-		const quote = text[offset]
+-		if(quote === '"' || quote === "'") {
+-			const end = text.indexOf(quote, offset + 1)
+-			return end < 0 ? undefined : text.slice(offset + 1, end)
+-		}
+-		let end = offset
+-		while(end < text.length && !'; \t\n\f\r'.includes(text[end])) {
+-			end++
+-		}
+-		return text.slice(offset, end)
+-	}
+-	return undefined
+-}
+-
+-function scanMeta(raw: string) {
+-	let charset: string | undefined
+-	const noop = () => {}
+-	const tokenizer = new Tokenizer({}, {
+-		onComment: noop, onDoctype: noop, onEndTag: noop, onEof: noop,
+-		onCharacter: noop, onNullCharacter: noop, onWhitespaceCharacter: noop,
+-		onStartTag(token) {
+-			// A tokenizer without a tree builder must enter raw-text modes
+-			// explicitly, otherwise script literals become markup.
+-			if(token.tagName === 'script') {
+-				tokenizer.state = TokenizerMode.SCRIPT_DATA
+-			} else if(['title', 'textarea'].includes(token.tagName)) {
+-				tokenizer.state = TokenizerMode.RCDATA
+-			} else if(['style', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript'].includes(token.tagName)) {
+-				tokenizer.state = TokenizerMode.RAWTEXT
+-			} else if(token.tagName === 'plaintext') {
+-				tokenizer.state = TokenizerMode.PLAINTEXT
+-			}
+-			if(charset || token.tagName !== 'meta') {
+-				return
+-			}
+-			const attrs = new Map(token.attrs.map(attr => [attr.name, attr.value]))
+-			const label = attrs.has('charset') ? attrs.get('charset')
+-				: attrs.get('http-equiv')?.toLowerCase() === 'content-type'
+-					? metaContentCharset(attrs.get('content') ?? '') : undefined
+-			charset = supportedCharset(label)
+-			if(charset?.startsWith('utf-16')) {
+-				charset = 'utf-8'
+-			} else if(charset === 'x-user-defined') {
+-				charset = 'windows-1252'
+-			}
+-		},
+-	})
+-	tokenizer.write(raw, true)
+-	return charset
+-}
+-
+-function scanXml(raw: string) {
+-	const space = (value: string | undefined) => value !== undefined && ' \t\r\n'.includes(value)
+-	if(!raw.startsWith('<?xml') || !space(raw[5])) {
+-		return undefined
+-	}
+-	let pos = 5
+-	let label: string | undefined
+-	const seen = new Set<string>()
+-	const skipSpace = () => {
+-		while(space(raw[pos])) {
+-			pos++
+-		}
+-	}
+-	while(pos < raw.length) {
+-		skipSpace()
+-		if(raw.startsWith('?>', pos)) {
+-			const charset = supportedCharset(label)
+-			return charset?.startsWith('utf-16') ? 'utf-8' : charset
+-		}
+-		const start = pos
+-		while(pos < raw.length && raw[pos] >= 'a' && raw[pos] <= 'z') {
+-			pos++
+-		}
+-		const key = raw.slice(start, pos)
+-		if(!['version', 'encoding', 'standalone'].includes(key) || seen.has(key)) {
+-			return undefined
+-		}
+-		seen.add(key)
+-		skipSpace()
+-		if(raw[pos++] !== '=') {
+-			return undefined
+-		}
+-		skipSpace()
+-		const quote = raw[pos++]
+-		if(quote !== '"' && quote !== "'") {
+-			return undefined
+-		}
+-		const end = raw.indexOf(quote, pos)
+-		if(end < 0) {
+-			return undefined
+-		}
+-		const value = raw.slice(pos, end)
+-		pos = end + 1
+-		if(key === 'version' && !['1.0', '1.1'].includes(value)
+-			|| key === 'standalone' && !['yes', 'no'].includes(value)) {
+-			return undefined
+-		}
+-		if(key === 'encoding') {
+-			if([...value].some(char => char.charCodeAt(0) <= 0x20)) {
+-				return undefined
+-			}
+-			label = value
+-		}
+-		if(!raw.startsWith('?>', pos) && !space(raw[pos])) {
+-			return undefined
+-		}
+-	}
+-	return undefined
+-}
+-
+-// Match Go's MIME parameter validation for HTML: a malformed parameter or
+-// conflicting duplicate invalidates the header charset and allows fallback.
+-function htmlHeaderCharset(contentType: string) {
+-	const tail = contentType.slice(contentType.indexOf(';') < 0 ? contentType.length : contentType.indexOf(';'))
+-	let rest = tail
+-	const params = new Map<string, string>()
+-	const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+/
+-	while(rest.trim()) {
+-		rest = rest.trimStart()
+-		if(!rest.startsWith(';')) { return undefined }
+-		rest = rest.slice(1).trimStart()
+-		if(!rest) { break }
+-		const key = token.exec(rest)?.[0]
+-		if(!key) { return undefined }
+-		rest = rest.slice(key.length).trimStart()
+-		if(!rest.startsWith('=')) { return undefined }
+-		rest = rest.slice(1).trimStart()
+-		let value = ''
+-		if(rest.startsWith('"')) {
+-			let pos = 1
+-			for(; pos < rest.length && rest[pos] !== '"'; pos++) {
+-				if(rest[pos] === '\\' && '()<>@,;:\\"/[]?='.includes(rest[pos + 1] ?? '\0')) {
+-					pos++
+-					if(pos === rest.length) { return undefined }
+-				}
+-				if(rest[pos] === '\r' || rest[pos] === '\n') { return undefined }
+-				value += rest[pos]
+-			}
+-			if(pos === rest.length) { return undefined }
+-			rest = rest.slice(pos + 1)
+-		} else {
+-			const match = token.exec(rest)?.[0]
+-			if(!match) { return undefined }
+-			value = match
+-			rest = rest.slice(value.length)
+-		}
+-		const name = key.toLowerCase()
+-		if(params.has(name) && params.get(name) !== value) { return undefined }
+-		params.set(name, value)
+-	}
+-	const decodePercent = (value: string) => {
+-		if(/%(?![0-9a-f]{2})/i.test(value)) { return undefined }
+-		return value.replace(/%([0-9a-f]{2})/ig, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+-	}
+-	const decodeExtended = (value: string) => {
+-		const match = /^(?:utf-8|us-ascii)'[^']*'(.*)$/i.exec(value)
+-		return match ? decodePercent(match[1]) : undefined
+-	}
+-	// Go's MIME parser supports RFC 2231 extended and continued parameters.
+-	const single = params.get('charset*')
+-	if(single !== undefined) {
+-		return decodeExtended(single) ?? params.get('charset')
+-	}
+-	let continued = ''
+-	let hasContinuation = false
+-	for(let index = 0; ; index++) {
+-		const plain = params.get(`charset*${index}`)
+-		const encoded = params.get(`charset*${index}*`)
+-		if(plain === undefined && encoded === undefined) { break }
+-		hasContinuation = true
+-		continued += plain ?? (index === 0 ? decodeExtended(encoded!) : decodePercent(encoded!)) ?? ''
+-	}
+-	return hasContinuation ? continued : params.get('charset')
+-}
+diff --git a/src/server/create-server.ts b/src/server/create-server.ts
+index e0f3188..03964c7 100644
+--- a/src/server/create-server.ts
++++ b/src/server/create-server.ts
+@@ -5,12 +5,20 @@ import type { Duplex } from 'stream'
+ import type { WebSocket } from 'ws'
+ import { WebSocketServer } from 'ws'
+ 
+-import { API_SERVER_PORT, ATTESTOR_ADDRESS_PATHNAME, BROWSER_RPC_PATHNAME, WS_PATHNAME } from '#src/config/index.ts'
+-import { AttestorServerSocket } from '#src/server/socket.ts'
+-import { getAttestorAddress } from '#src/server/utils/generics.ts'
++import {
++	API_SERVER_PORT,
++	ATTESTOR_ADDRESS_PATHNAME,
++	BROWSER_RPC_PATHNAME,
++	MAX_AUTHENTICATED_WS_PAYLOAD_BYTES,
++	MAX_PRE_AUTH_WS_PAYLOAD_BYTES,
++	WS_PATHNAME
++} from '#src/config/index.ts'
++import { AttestorServerSocket, hasAuthSocketCapacity } from '#src/server/socket.ts'
++import { getAttestorAddress, getInitialMessagesFromQuery } from '#src/server/utils/generics.ts'
+ import { addKeepAlive } from '#src/server/utils/keep-alive.ts'
+ import type { BGPListener } from '#src/types/index.ts'
+ import { createBgpListener } from '#src/utils/bgp-listener.ts'
++import { assertValidAuthRequest } from '#src/utils/auth.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { logger as LOGGER } from '#src/utils/index.ts'
+ import { SelectedServiceSignatureType } from '#src/utils/signatures/index.ts'
+@@ -44,8 +52,15 @@ export async function createServer(port = PORT) {
+ 		? createBgpListener(LOGGER.child({ service: 'bgp-listener' }))
+ 		: undefined
+ 
+-	const wss = new WebSocketServer({ noServer: true })
+-	http.on('upgrade', handleUpgrade.bind(wss))
++	const wss = new WebSocketServer({
++		noServer: true,
++		maxPayload: MAX_AUTHENTICATED_WS_PAYLOAD_BYTES,
++		perMessageDeflate: false,
++	})
++	const preAuthWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PRE_AUTH_WS_PAYLOAD_BYTES })
++	http.on('upgrade', (request, socket, head) => {
++		void handleUpgrade(wss, preAuthWss, request, socket, head)
++	})
+ 	http.on('request', (req, res) => {
+ 		const url = URL.parse(req.url || '', 'http://localhost')
+ 		if(!url) {
+@@ -100,6 +123,7 @@ export async function createServer(port = PORT) {
+ 
+ 	const wssClose = wss.close.bind(wss)
+ 	wss.close = (cb) => {
++		preAuthWss.close()
+ 		wssClose(() => http.close(cb))
+ 		bgpListener?.close()
+ 	}
+@@ -126,20 +150,36 @@ async function handleNewClient(
+ 	addKeepAlive(ws, LOGGER.child({ sessionId: client.sessionId }))
+ }
+ 
+-function handleUpgrade(
+-	this: WebSocketServer,
++// Only a verified auth in the upgrade query, where the client sends init, admits claim-sized messages.
++async function handleUpgrade(
++	wss: WebSocketServer,
++	preAuthWss: WebSocketServer,
+ 	request: IncomingMessage,
+ 	socket: Duplex,
+ 	head: Buffer
+ ) {
+ 	const { pathname } = new URL(request.url!, 'wss://base.url')
+-
+-	if(pathname === WS_PATHNAME) {
+-		this.handleUpgrade(request, socket, head, (ws) => {
+-			this.emit('connection', ws, request)
+-		})
++	if(pathname !== WS_PATHNAME) {
++		socket.destroy()
+ 		return
+ 	}
+ 
+-	socket.destroy()
++	const destroy = () => socket.destroy()
++	socket.on('error', destroy)
++	const server = await hasVerifiedQueryAuth(request) ? wss : preAuthWss
++	socket.off('error', destroy)
++	server.handleUpgrade(request, socket, head, (ws) => {
++		wss.emit('connection', ws, request)
++	})
++}
++
++async function hasVerifiedQueryAuth(request: IncomingMessage) {
++	try {
++		const init = getInitialMessagesFromQuery(request)[0]?.initRequest
++		if(!init?.auth) return false
++		await assertValidAuthRequest(init.auth, init.signatureType)
++		return hasAuthSocketCapacity(init.auth.data!.id)
++	} catch {
++		return false
++	}
+ }
+diff --git a/src/server/handlers/fetchCertificateBytes.ts b/src/server/handlers/fetchCertificateBytes.ts
+index 9a31983..b2e2a2a 100644
+--- a/src/server/handlers/fetchCertificateBytes.ts
++++ b/src/server/handlers/fetchCertificateBytes.ts
+@@ -1,66 +1,6 @@
+-import { concatenateUint8Arrays, loadX509FromPem } from '@reclaimprotocol/tls'
+-
+-import { CERT_ALLOWED_MIMETYPES, MAX_CERT_SIZE_BYTES } from '#src/config/index.ts'
++import { refuseCertificateFetch } from '#src/server/utils/certificate-fetch.ts'
+ import type { RPCHandler } from '#src/types/handlers.ts'
+-import { AttestorError } from '#src/utils/error.ts'
+-
+-export const fetchCertificateBytes: RPCHandler<'fetchCertificateBytes'> = async(
+-	{ url },
+-) => {
+-	const res = await fetch(url, {
+-		redirect: 'follow',
+-		signal: AbortSignal.timeout(10_000)
+-	})
+-	if(!res.ok) {
+-		res.body?.cancel('Not ok')
+-		throw new AttestorError(
+-			'ERROR_CERTIFICATE_FETCH_FAILED',
+-			`Failed to fetch certificate from URL: ${url}, status: ${res.status}`
+-		)
+-	}
+-
+-	const contentType = res.headers.get('content-type')
+-	if(!contentType || !CERT_ALLOWED_MIMETYPES.includes(contentType)) {
+-		res.body?.cancel('Mismatch')
+-		throw new AttestorError(
+-			'ERROR_CERTIFICATE_FETCH_FAILED',
+-			`Invalid content-type when fetching certificate from URL: ${url},`
+-			+ ` content-type: ${contentType}`
+-		)
+-	}
+-
+-	if(!res.body) {
+-		throw new AttestorError(
+-			'ERROR_CERTIFICATE_FETCH_FAILED',
+-			`No body in response when fetching certificate from URL: ${url}`
+-		)
+-	}
+-
+-	let total = 0
+-	const byteArr: Uint8Array[] = []
+-	for await (const chunk of res.body) {
+-		total += chunk.length
+-		if(total > MAX_CERT_SIZE_BYTES) {
+-			res.body.cancel('Too many bytes')
+-			throw new AttestorError(
+-				'ERROR_CERTIFICATE_FETCH_FAILED',
+-				`Certificate size exceeds maximum limit of ${MAX_CERT_SIZE_BYTES}b`
+-			)
+-		}
+-
+-		byteArr.push(chunk)
+-	}
+-
+-	const bytes = concatenateUint8Arrays(byteArr)
+-	try {
+-		const cert = loadX509FromPem(bytes)
+-		TLS_INTERMEDIATE_CA_CACHE[url] = cert
+-	} catch(err) {
+-		throw new AttestorError(
+-			'ERROR_CERTIFICATE_FETCH_FAILED',
+-			`Failed to parse certificate, error: ${err.message}`
+-		)
+-	}
+ 
+-	return { bytes: concatenateUint8Arrays(byteArr) }
+-}
+\ No newline at end of file
++export const fetchCertificateBytes: RPCHandler<'fetchCertificateBytes'> = async() => ({
++	bytes: await refuseCertificateFetch()
++})
+diff --git a/src/server/handlers/toprf.ts b/src/server/handlers/toprf.ts
+index b05fcb3..4a1bbb1 100644
+--- a/src/server/handlers/toprf.ts
++++ b/src/server/handlers/toprf.ts
+@@ -1,25 +1,7 @@
+-import { getBytes } from 'ethers'
+-
+ import type { RPCHandler } from '#src/types/index.ts'
+-import { getEnvVariable } from '#src/utils/env.ts'
+-import { getEngineString, makeDefaultOPRFOperator } from '#src/utils/index.ts'
+-
+-export const toprf: RPCHandler<'toprf'> = async(
+-	{ maskedData, engine },
+-	{ logger }
+-) => {
+-	const PRIVATE_KEY_STR = getEnvVariable('TOPRF_SHARE_PRIVATE_KEY')
+-	const PUBLIC_KEY_STR = getEnvVariable('TOPRF_SHARE_PUBLIC_KEY')
+-	if(!PRIVATE_KEY_STR || !PUBLIC_KEY_STR) {
+-		throw new Error('private/public keys not set. Cannot execute OPRF')
+-	}
+-
+-	const PRIVATE_KEY = getBytes(PRIVATE_KEY_STR)
+-	const PUBLIC_KEY = getBytes(PUBLIC_KEY_STR)
+-
+-	const engineStr = getEngineString(engine)
+-	const operator = makeDefaultOPRFOperator('chacha20', engineStr, logger)
+-	const res = await operator.evaluateOPRF(PRIVATE_KEY, maskedData)
++import { rejection } from '#src/utils/rejection-reason.ts'
+ 
+-	return { ...res, publicKeyShare: PUBLIC_KEY }
+-}
+\ No newline at end of file
++// Unlimited OPRF on client input lets anyone link handles to on-chain nullifiers; oprf-raw runs inside claimTunnel.
++export const toprf: RPCHandler<'toprf'> = async() => {
++	throw rejection('ERROR_BAD_REQUEST', 'TOPRF_DISABLED', 'TOPRF requests are disabled')
++}
+diff --git a/src/server/socket.ts b/src/server/socket.ts
+index f7f042e..cdad96b 100644
+--- a/src/server/socket.ts
++++ b/src/server/socket.ts
+@@ -3,7 +3,7 @@ import { promisify } from 'util'
+ import type { WebSocket as WS } from 'ws'
+ 
+ import { handleMessage } from '#src/client/utils/message-handler.ts'
+-import { DEFAULT_RPC_TIMEOUT_MS } from '#src/config/index.ts'
++import { DEFAULT_RPC_TIMEOUT_MS, INIT_TIMEOUT_MS, MAX_SOCKETS_PER_AUTH } from '#src/config/index.ts'
+ import type { AuthenticatedUserData, RPCMessage, TunnelMessage } from '#src/proto/api.ts'
+ import { HANDLERS } from '#src/server/handlers/index.ts'
+ import { AuthSession, authExpiredError } from '#src/server/utils/auth-session.ts'
+@@ -16,6 +16,13 @@ import { AttestorSocket } from '#src/utils/socket-base.ts'
+ import { createServerLogRef, safeErrorCode, safeHandler, safeRpcStage } from '#src/utils/logger.ts'
+ import { rejection } from '#src/utils/rejection-reason.ts'
+ 
++const openSocketsByAuth = new Map<string, number>()
++
++/** Whether another socket may still init with this auth ID on this instance. */
++export function hasAuthSocketCapacity(identity: string) {
++	return (openSocketsByAuth.get(identity) ?? 0) < MAX_SOCKETS_PER_AUTH
++}
++
+ export class AttestorServerSocket extends AttestorSocket implements IAttestorServerSocket {
+ 
+ 	tunnels: IAttestorServerSocket['tunnels'] = {}
+@@ -23,6 +30,8 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 	readonly bgpListener: BGPListener | undefined
+ 	private authSession: AuthSession | undefined
+ 	private connectionState: 'open' | 'terminating' | 'closed' = 'open'
++	private readonly initDeadline: ReturnType<typeof setTimeout>
++	private countedAuthIdentity: string | undefined
+ 
+ 	private constructor(
+ 		socket: WS,
+@@ -47,11 +56,22 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 			this.closeResources()
+ 			if(closeSocket) this.socket.close()
+ 		})
++		// Keep-alive pongs would hold a socket that never authenticates open indefinitely.
++		this.initDeadline = setTimeout(() => {
++			if(this.isInitialised) return
++			const err = rejection('ERROR_TIMEOUT', 'INIT_TIMEOUT', 'Init not received in time')
++			this.logger.warn({ err }, 'init deadline reached')
++			void this.terminateConnection(err)
++				.catch(terminateErr => this.logger.error({ err: terminateErr }, 'failed to terminate uninitialised socket'))
++		}, INIT_TIMEOUT_MS)
++		this.initDeadline.unref?.()
+ 	}
+ 
+ 	private closeResources() {
+ 		if(this.connectionState === 'closed') return
+ 		this.connectionState = 'closed'
++		clearTimeout(this.initDeadline)
++		this.releaseAuthSlot()
+ 		this.authSession?.dispose()
+ 		for(const tunnelId in this.tunnels) {
+ 			const tunnel = this.tunnels[tunnelId]
+@@ -86,6 +106,12 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 	setAuthSession(data: AuthenticatedUserData) {
+ 		if(this.authSession) throw AttestorError.badRequest('Auth session already set')
+ 		assertCanonicalHostWhitelist(data.hostWhitelist)
++		if(this.connectionState !== 'open') throw authExpiredError()
++		if(!hasAuthSocketCapacity(data.id)) {
++			throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_SOCKET_LIMIT', 'Too many open sockets for this auth')
++		}
++		openSocketsByAuth.set(data.id, (openSocketsByAuth.get(data.id) ?? 0) + 1)
++		this.countedAuthIdentity = data.id
+ 		this.authSession = new AuthSession(
+ 			data,
+ 			() => {
+@@ -97,6 +123,15 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
+ 		this.assertAuthActive()
+ 	}
+ 
++	private releaseAuthSlot() {
++		const identity = this.countedAuthIdentity
++		if(identity === undefined) return
++		this.countedAuthIdentity = undefined
++		const open = (openSocketsByAuth.get(identity) ?? 1) - 1
++		if(open > 0) openSocketsByAuth.set(identity, open)
++		else openSocketsByAuth.delete(identity)
++	}
++
+ 	assertAuthActive() {
+ 		if(this.connectionState !== 'open') throw authExpiredError()
+ 		this.authSession?.assertActive()
+diff --git a/src/server/utils/certificate-fetch.ts b/src/server/utils/certificate-fetch.ts
+new file mode 100644
+index 0000000..92d26bf
+--- /dev/null
++++ b/src/server/utils/certificate-fetch.ts
+@@ -0,0 +1,6 @@
++import { rejection } from '#src/utils/rejection-reason.ts'
++
++/** The issuer URL comes from the client or a peer certificate; reviewed provider hosts send complete chains. */
++export async function refuseCertificateFetch(): Promise<Uint8Array> {
++	throw rejection('ERROR_CERTIFICATE_FETCH_FAILED', 'CERTIFICATE_FETCH_DISABLED', 'Certificate fetching is disabled')
++}
+diff --git a/src/server/utils/claim-context-policy.ts b/src/server/utils/claim-context-policy.ts
+index d11a550..4eadc61 100644
+--- a/src/server/utils/claim-context-policy.ts
++++ b/src/server/utils/claim-context-policy.ts
+@@ -1,13 +1,16 @@
++import { createHash } from 'node:crypto'
++
+ import { CHAIN_ID } from '#src/utils/chain-id.ts'
+ import { canonicalStringify } from '#src/utils/claims.ts'
+ import { AttestorError } from '#src/utils/error.ts'
+ import type { RejectionReason } from '#src/utils/rejection-reason.ts'
+ 
+-const INPUT_KEYS = ['contextAddress', 'contextMessage', 'reclaimSessionId']
++const INPUT_KEYS = ['contextAddress', 'contextMessage', 'identityProvider', 'reclaimSessionId']
+ const SIGNED_KEYS = [...INPUT_KEYS, 'providerHash', 'extractedParameters']
+ const RESERVED_EXTRACTED_KEYS = new Set([...SIGNED_KEYS, 'attestationNonce', 'attestationNonceData'])
+ const ADDRESS = /^0x[a-f0-9]{40}$/
+ const HASH = /^0x[a-f0-9]{64}$/
++const IDENTITY_PROVIDER = /^[a-z][a-z0-9_]{0,63}$/
+ const DECIMAL = /^(0|[1-9][0-9]*)$/
+ const MESSAGE = /^[\x20-\x21\x23-\x5b\x5d-\x7e]+$/
+ const EXTRACTED_KEY = /^[a-z][a-z0-9_]{0,63}$/
+@@ -16,7 +19,23 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
+ type InputContext = {
+ 	contextAddress: string
+ 	contextMessage: string
++	identityProvider: string
+ 	reclaimSessionId: string
++	allowedHashes: readonly string[]
++}
++
++function boundAuthIdentity(value: string | undefined): {
++	sessionId: string, identityProvider: string, allowedHashes: string[], scopeDigest: string
++} | undefined {
++	if(!value) return undefined
++	const parts = value.split(':')
++	if(parts.length !== 5 || parts[0] !== 'umia1' || !parts[1]
++		|| !IDENTITY_PROVIDER.test(parts[2]) || !/^[a-f0-9]{64}$/.test(parts[4])) return undefined
++	const hashes = parts[3].split(',')
++	if(!hashes.length || hashes.some(hash => !HASH.test(hash))
++		|| [...hashes].sort().join(',') !== parts[3]
++		|| new Set(hashes).size !== hashes.length) return undefined
++	return { sessionId: parts[1], identityProvider: parts[2], allowedHashes: hashes, scopeDigest: parts[4] }
+ }
+ 
+ // The runner adapter matches this exact message; the reason carries the finite detail.
+@@ -67,14 +86,25 @@ export function assertSupportedInputContext(
+ 	if(typeof input.contextAddress !== 'string' || !ADDRESS.test(input.contextAddress)) {
+ 		return invalid('CLAIM_CONTEXT_INVALID')
+ 	}
++	if(typeof input.identityProvider !== 'string' || !IDENTITY_PROVIDER.test(input.identityProvider)) {
++		return invalid('CLAIM_CONTEXT_INVALID')
++	}
+ 	const form = parseContextMessage(input.contextMessage, input.contextAddress)
+ 	if(!form) return invalid('CLAIM_CONTEXT_MESSAGE_UNSUPPORTED')
+ 	if(!chainIds.includes(form.chainId)) return invalid('CLAIM_CONTEXT_CHAIN_NOT_ALLOWED')
+-	if(!authIdentity || input.reclaimSessionId !== authIdentity) return invalid('CLAIM_CONTEXT_SESSION_MISMATCH')
++	const binding = boundAuthIdentity(authIdentity)
++	if(!binding || input.reclaimSessionId !== binding.sessionId
++		|| input.identityProvider !== binding.identityProvider) return invalid('CLAIM_CONTEXT_SESSION_MISMATCH')
++	const messageDigest = `sha256:${createHash('sha256').update(input.contextMessage as string).digest('hex')}`
++	const scopeDigest = createHash('sha256')
++		.update(`${input.contextAddress}:${messageDigest}`).digest('hex')
++	if(scopeDigest !== binding.scopeDigest) return invalid('CLAIM_CONTEXT_SESSION_MISMATCH')
+ 	return {
+ 		contextAddress: input.contextAddress,
+ 		contextMessage: input.contextMessage as string,
+-		reclaimSessionId: authIdentity
++		identityProvider: input.identityProvider,
++		reclaimSessionId: binding.sessionId,
++		allowedHashes: binding.allowedHashes
+ 	}
+ }
+ 
+@@ -85,6 +115,7 @@ export function assertSupportedSignedContext(raw: unknown, input: InputContext):
+ 		if(signed[key] !== input[key]) return invalid('SIGNED_CONTEXT_INVALID')
+ 	}
+ 	if(typeof signed.providerHash !== 'string' || !HASH.test(signed.providerHash)) return invalid('SIGNED_CONTEXT_INVALID')
++	if(!input.allowedHashes.includes(signed.providerHash)) return invalid('SIGNED_CONTEXT_INVALID')
+ 	const extracted = signed.extractedParameters
+ 	if(!extracted || typeof extracted !== 'object' || Array.isArray(extracted)) return invalid('SIGNED_CONTEXT_INVALID')
+ 	const entries = Object.entries(extracted)
+@@ -93,7 +124,7 @@ export function assertSupportedSignedContext(raw: unknown, input: InputContext):
+ 		|| typeof value !== 'string' || !value.trim().length)) return invalid('SIGNED_CONTEXT_INVALID')
+ 
+ 	// Claims.sol reads the first raw target, so each must identify this top-level value.
+-	for(const key of ['contextAddress', 'contextMessage', 'providerHash'] as const) {
++	for(const key of ['contextAddress', 'contextMessage', 'identityProvider', 'providerHash'] as const) {
+ 		const target = `"${key}":"`
+ 		if(raw.indexOf(target) !== raw.lastIndexOf(target)) return invalid('SIGNED_CONTEXT_INVALID')
+ 		const start = raw.indexOf(target) + target.length
+diff --git a/src/server/utils/process-handshake.ts b/src/server/utils/process-handshake.ts
+index bb04905..657420e 100644
+--- a/src/server/utils/process-handshake.ts
++++ b/src/server/utils/process-handshake.ts
+@@ -19,6 +19,7 @@ import {
+ 
+ import type { ClaimTunnelRequest } from '#src/proto/api.ts'
+ import { TranscriptMessageSenderType } from '#src/proto/api.ts'
++import { refuseCertificateFetch } from '#src/server/utils/certificate-fetch.ts'
+ import type { Logger } from '#src/types/index.ts'
+ import { decryptDirect } from '#src/utils/index.ts'
+ 
+@@ -234,7 +235,7 @@ export async function processHandshake(receipt: ClaimTunnelRequest['transcript']
+ 			const parseResult = parseCertificates(content, { version: tlsVersion! })
+ 			certificates.push(...parseResult.certificates)
+ 
+-			await verifyCertificateChain(certificates, hostname!, logger)
++			await verifyCertificateChain(certificates, hostname!, logger, refuseCertificateFetch)
+ 			logger.info({ hostname }, 'verified provider certificate chain')
+ 			certVerified = true
+ 			break
+@@ -277,7 +278,7 @@ export async function processHandshake(receipt: ClaimTunnelRequest['transcript']
+ 				signatureData: signatureData12,
+ 				publicKeyType: keyShare.publicKeyType
+ 			})
+-			await verifyCertificateChain(certificates, hostname!, logger)
++			await verifyCertificateChain(certificates, hostname!, logger, refuseCertificateFetch)
+ 			logger.info({ hostname }, 'verified provider certificate chain')
+ 			certVerified = true
+ 			break
+diff --git a/src/server/utils/sev-snp/secure-boot.test.ts b/src/server/utils/sev-snp/secure-boot.test.ts
+deleted file mode 100644
+index 49a1ef2..0000000
+--- a/src/server/utils/sev-snp/secure-boot.test.ts
++++ /dev/null
+@@ -1,155 +0,0 @@
+-import assert from 'node:assert'
+-import { createHash,X509Certificate } from 'node:crypto'
+-import { readFileSync } from 'node:fs'
+-import test from 'node:test'
+-
+-import { verifySecureBootEventLog } from '#src/server/utils/sev-snp/secure-boot.ts'
+-
+-const R_CERT = Buffer.from(new X509Certificate(
+-	readFileSync('./cert/secure-boot/R.crt.pem')
+-).raw)
+-const OTHER_CERT = Buffer.from(new X509Certificate(
+-	readFileSync('./cert/sev-snp/gcp_vtpm_ca_root.crt')
+-).raw)
+-
+-function le32(value: number) {
+-	const b = Buffer.alloc(4); b.writeUInt32LE(value); return b
+-}
+-
+-function le64(value: number) {
+-	const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(value)); return b
+-}
+-
+-function variable(name: string, value: Buffer): Buffer {
+-	const encodedName = Buffer.from(name, 'utf16le')
+-	return Buffer.concat([
+-		Buffer.alloc(16),
+-		le64(name.length),
+-		le64(value.length),
+-		encodedName,
+-		value,
+-	])
+-}
+-
+-function x509SignatureList(cert: Buffer): Buffer {
+-	// EFI_CERT_X509_GUID a5c059a1-94e4-4aa7-87b5-ab155c2bf072,
+-	// with the first three GUID fields encoded little-endian on disk.
+-	const x509Guid = Buffer.from('a159c0a5e494a74a87b5ab155c2bf072', 'hex')
+-	const signatureSize = 16 + cert.length
+-	return Buffer.concat([
+-		x509Guid,
+-		le32(28 + signatureSize),
+-		le32(0),
+-		le32(signatureSize),
+-		Buffer.alloc(16),
+-		cert,
+-	])
+-}
+-
+-interface EventInput { pcr: number, type: number, data: Buffer }
+-
+-function encodeEvent(event: EventInput): Buffer {
+-	const sha256 = createHash('sha256').update(event.data).digest()
+-	const sha384 = createHash('sha384').update(event.data).digest()
+-	return Buffer.concat([
+-		le32(event.pcr), le32(event.type), le32(2),
+-		Buffer.from([0x0b, 0x00]), sha256,
+-		Buffer.from([0x0c, 0x00]), sha384,
+-		le32(event.data.length), event.data,
+-	])
+-}
+-
+-function specIdEvent(): Buffer {
+-	const data = Buffer.concat([
+-		Buffer.from('Spec ID Event03\0', 'ascii'),
+-		le32(0),
+-		Buffer.from([0, 2, 0, 2]),
+-		le32(2),
+-		Buffer.from([0x0b, 0x00, 32, 0]),
+-		Buffer.from([0x0c, 0x00, 48, 0]),
+-		Buffer.from([0]),
+-	])
+-	return Buffer.concat([
+-		le32(0), le32(3), Buffer.alloc(20), le32(data.length), data,
+-	])
+-}
+-
+-function buildLog(options: {
+-	enabled?: boolean
+-	duplicateDb?: boolean
+-	preAuthority?: boolean
+-	foreignAuthority?: boolean
+-} = {}) {
+-	const esl = x509SignatureList(R_CERT)
+-	const db = options.duplicateDb ? Buffer.concat([esl, esl]) : esl
+-	const events: EventInput[] = [
+-		{ pcr: 7, type: 0x80000001, data: variable('SecureBoot', Buffer.from([options.enabled === false ? 0 : 1])) },
+-		{ pcr: 7, type: 0x80000001, data: variable('PK', esl) },
+-		{ pcr: 7, type: 0x80000001, data: variable('KEK', esl) },
+-		{ pcr: 7, type: 0x80000001, data: variable('db', db) },
+-	]
+-	if(options.preAuthority) {
+-		events.push({ pcr: 7, type: 0x800000e0, data: variable('db', Buffer.concat([Buffer.alloc(16), R_CERT])) })
+-	}
+-	events.push(
+-		{ pcr: 7, type: 0x00000004, data: Buffer.alloc(4) },
+-		{
+-			pcr: 7,
+-			type: 0x800000e0,
+-			data: variable('db', Buffer.concat([Buffer.alloc(16), options.foreignAuthority ? OTHER_CERT : R_CERT])),
+-		},
+-		{ pcr: 4, type: 0x80000003, data: Buffer.from('R-signed UKI') },
+-		{ pcr: 11, type: 0x0000000d, data: Buffer.from('UKI section measurements') },
+-	)
+-	const pcrs = (bank: 'sha256' | 'sha384') => {
+-		const size = bank === 'sha256' ? 32 : 48
+-		const result = new Map<number, Buffer>()
+-		for(const pcr of [4, 7, 11]) {
+-			let value = Buffer.alloc(size)
+-			for(const event of events.filter(e => e.pcr === pcr)) {
+-				const digest = createHash(bank).update(event.data).digest()
+-				value = createHash(bank).update(value).update(digest).digest()
+-			}
+-			result.set(pcr, value)
+-		}
+-		return result
+-	}
+-	return {
+-		raw: Buffer.concat([specIdEvent(), ...events.map(encodeEvent)]),
+-		sha256Pcrs: pcrs('sha256'),
+-		sha384Pcrs: pcrs('sha384'),
+-	}
+-}
+-
+-test('Secure Boot event log verifies for both cloud PCR banks', () => {
+-	const fixture = buildLog()
+-	for(const [bank, pcrs] of [
+-		['sha256', fixture.sha256Pcrs],
+-		['sha384', fixture.sha384Pcrs],
+-	] as const) {
+-		const result = verifySecureBootEventLog(fixture.raw, pcrs, bank)
+-		assert.equal(result.postSeparatorUses, 1)
+-		assert.equal(result.eventLogBytes, fixture.raw.length)
+-	}
+-})
+-
+-test('Secure Boot event log rejects a quoted-PCR mismatch', () => {
+-	const fixture = buildLog()
+-	fixture.sha256Pcrs.set(7, Buffer.alloc(32, 0xff))
+-	assert.throws(
+-		() => verifySecureBootEventLog(fixture.raw, fixture.sha256Pcrs, 'sha256'),
+-		/does not replay/
+-	)
+-})
+-
+-test('Secure Boot event log rejects disabled Secure Boot and an extra db key', () => {
+-	for(const fixture of [buildLog({ enabled: false }), buildLog({ duplicateDb: true })]) {
+-		assert.throws(() => verifySecureBootEventLog(fixture.raw, fixture.sha256Pcrs, 'sha256'))
+-	}
+-})
+-
+-test('Secure Boot event log rejects pre-separator and foreign authorities', () => {
+-	for(const fixture of [buildLog({ preAuthority: true }), buildLog({ foreignAuthority: true })]) {
+-		assert.throws(() => verifySecureBootEventLog(fixture.raw, fixture.sha256Pcrs, 'sha256'))
+-	}
+-})
+diff --git a/src/server/utils/sev-snp/secure-boot.ts b/src/server/utils/sev-snp/secure-boot.ts
+deleted file mode 100644
+index fc98dba..0000000
+--- a/src/server/utils/sev-snp/secure-boot.ts
++++ /dev/null
+@@ -1,343 +0,0 @@
+-import { createHash, createPublicKey,X509Certificate } from 'node:crypto'
+-import { readFileSync } from 'node:fs'
+-
+-const MAX_EVENT_LOG = 1024 * 1024
+-const MAX_EVENTS = 8192
+-const MAX_DIGESTS = 16
+-const MAX_VARIABLE_NAME = 2048
+-const MAX_VARIABLE_DATA = 1024 * 1024
+-
+-const EV_NO_ACTION = 0x00000003
+-const EV_SEPARATOR = 0x00000004
+-const EV_EFI_VARIABLE_DRIVER_CONFIG = 0x80000001
+-const EV_EFI_ACTION = 0x80000007
+-const EV_EFI_VARIABLE_AUTHORITY = 0x800000e0
+-
+-const TPM_ALG_SHA256 = 0x000b
+-const TPM_ALG_SHA384 = 0x000c
+-
+-// EFI GUIDs use little-endian encoding for the first three fields.
+-const EFI_CERT_X509_GUID = 'a159c0a5e494a74a87b5ab155c2bf072'
+-const EFI_CERT_SHA256_GUID = '2616c4c14c509240aca941f936934328'
+-
+-const RELEASE_SPKI = Buffer.from(createPublicKey(
+-	readFileSync('./cert/secure-boot/R.pub.pem')
+-).export({ type: 'spki', format: 'der' }))
+-
+-type Bank = 'sha256' | 'sha384'
+-
+-interface EventDigest {
+-	alg: number
+-	value: Buffer
+-}
+-
+-interface TcgEvent {
+-	sequence: number
+-	pcr: number
+-	type: number
+-	digests: EventDigest[]
+-	data: Buffer
+-}
+-
+-interface SignatureDatabase {
+-	certs: X509Certificate[]
+-	hashes: Buffer[]
+-}
+-
+-export interface SecureBootEventLogResult {
+-	eventLogBytes: number
+-	verifiedEvents: number
+-	postSeparatorUses: number
+-	releasePublicKeySha256: string
+-}
+-
+-class LEReader {
+-	offset = 0
+-	readonly data: Buffer
+-	constructor(data: Buffer) { this.data = data }
+-
+-	remaining() { return this.data.length - this.offset }
+-	need(size: number, label: string) {
+-		if(size < 0 || size > this.remaining()) {
+-			throw new Error(`TCG event log truncated while reading ${label}`)
+-		}
+-	}
+-	u8(label: string) { this.need(1, label); return this.data[this.offset++] }
+-	u16(label: string) { this.need(2, label); const v = this.data.readUInt16LE(this.offset); this.offset += 2; return v }
+-	u32(label: string) { this.need(4, label); const v = this.data.readUInt32LE(this.offset); this.offset += 4; return v }
+-	u64(label: string) { this.need(8, label); const v = this.data.readBigUInt64LE(this.offset); this.offset += 8; return v }
+-	bytes(size: number, label: string) {
+-		this.need(size, label)
+-		const value = Buffer.from(this.data.subarray(this.offset, this.offset + size))
+-		this.offset += size
+-		return value
+-	}
+-}
+-
+-function digestSize(alg: number): number | undefined {
+-	if(alg === 0x0004) {return 20}
+-	if(alg === TPM_ALG_SHA256) {return 32}
+-	if(alg === TPM_ALG_SHA384) {return 48}
+-	if(alg === 0x000d) {return 64}
+-	return undefined
+-}
+-
+-function parseSpecId(data: Buffer): Map<number, number> {
+-	const r = new LEReader(data)
+-	const signature = r.bytes(16, 'Spec ID signature')
+-	if(!signature.equals(Buffer.from('Spec ID Event03\0', 'ascii'))) {
+-		throw new Error('TCG event log has an invalid Spec ID signature')
+-	}
+-	r.u32('platform class')
+-	const minor = r.u8('Spec ID minor version')
+-	const major = r.u8('Spec ID major version')
+-	r.u8('Spec ID errata')
+-	r.u8('Spec ID uintn size')
+-	if(major !== 2 || minor !== 0) {
+-		throw new Error(`unsupported TCG Spec ID version ${major}.${minor}`)
+-	}
+-	const count = r.u32('Spec ID algorithm count')
+-	if(count === 0 || count > MAX_DIGESTS) {
+-		throw new Error(`invalid TCG Spec ID algorithm count ${count}`)
+-	}
+-	const algorithms = new Map<number, number>()
+-	for(let i = 0; i < count; i++) {
+-		const alg = r.u16('Spec ID algorithm')
+-		const size = r.u16('Spec ID digest size')
+-		if(size === 0 || size > 128 || algorithms.has(alg)) {
+-			throw new Error(`invalid TCG digest algorithm 0x${alg.toString(16)}`)
+-		}
+-		algorithms.set(alg, size)
+-	}
+-	const vendorSize = r.u8('Spec ID vendor size')
+-	if(r.remaining() !== vendorSize) {
+-		throw new Error('TCG Spec ID vendor data length mismatch')
+-	}
+-	r.bytes(vendorSize, 'Spec ID vendor data')
+-	return algorithms
+-}
+-
+-function parseEventLog(raw: Uint8Array): TcgEvent[] {
+-	const bytes = Buffer.from(raw)
+-	if(bytes.length === 0) {throw new Error('Secure Boot attestation carries no event log')}
+-	if(bytes.length > MAX_EVENT_LOG) {throw new Error(`Secure Boot event log exceeds ${MAX_EVENT_LOG} bytes`)}
+-	const r = new LEReader(bytes)
+-
+-	const firstPcr = r.u32('first event PCR')
+-	const firstType = r.u32('first event type')
+-	r.bytes(20, 'first event SHA-1 digest')
+-	const firstSize = r.u32('first event size')
+-	const firstData = r.bytes(firstSize, 'first event data')
+-	if(firstPcr > 23 || firstType !== EV_NO_ACTION) {
+-		throw new Error('Secure Boot requires a TPM 2.0 crypto-agile event log')
+-	}
+-	const algorithms = parseSpecId(firstData)
+-
+-	const events: TcgEvent[] = []
+-	while(r.remaining() !== 0) {
+-		if(events.length >= MAX_EVENTS) {throw new Error(`TCG event log exceeds ${MAX_EVENTS} events`)}
+-		const pcr = r.u32('event PCR')
+-		if(pcr === 0xffffffff) {break}
+-		if(pcr > 23) {throw new Error(`TCG event uses invalid PCR ${pcr}`)}
+-		const type = r.u32('event type')
+-		const count = r.u32('event digest count')
+-		if(count === 0 || count > MAX_DIGESTS) {throw new Error(`invalid event digest count ${count}`)}
+-		const digests: EventDigest[] = []
+-		const seen = new Set<number>()
+-		for(let i = 0; i < count; i++) {
+-			const alg = r.u16('event digest algorithm')
+-			const size = algorithms.get(alg)
+-			if(!size || size !== digestSize(alg) || seen.has(alg)) {
+-				throw new Error(`unsupported or duplicate event digest algorithm 0x${alg.toString(16)}`)
+-			}
+-			seen.add(alg)
+-			digests.push({ alg, value: r.bytes(size, 'event digest') })
+-		}
+-		const size = r.u32('event data size')
+-		if(size > MAX_EVENT_LOG) {throw new Error(`event data is too large: ${size}`)}
+-		events.push({ sequence: events.length + 1, pcr, type, digests, data: r.bytes(size, 'event data') })
+-	}
+-	return events
+-}
+-
+-function bankAlgorithm(bank: Bank): { id: number, size: number } {
+-	return bank === 'sha256'
+-		? { id: TPM_ALG_SHA256, size: 32 }
+-		: { id: TPM_ALG_SHA384, size: 48 }
+-}
+-
+-function replay(events: TcgEvent[], quotedPcrs: Map<number, Buffer>, bank: Bank): TcgEvent[] {
+-	const { id, size } = bankAlgorithm(bank)
+-	const verified: TcgEvent[] = []
+-	for(const pcr of [4, 7, 11]) {
+-		const expected = quotedPcrs.get(pcr)
+-		if(expected?.length !== size) {
+-			throw new Error(`provider quote missing ${bank} PCR ${pcr}`)
+-		}
+-		let value = Buffer.alloc(size)
+-		let count = 0
+-		for(const event of events) {
+-			if(event.pcr !== pcr || event.type === EV_NO_ACTION) {continue}
+-			const digest = event.digests.find(d => d.alg === id)?.value
+-			if(!digest) {throw new Error(`PCR ${pcr} event has no ${bank} digest`)}
+-			value = createHash(bank).update(value).update(digest).digest()
+-			verified.push(event)
+-			count++
+-		}
+-		if(count === 0 || !value.equals(expected)) {
+-			throw new Error(`Secure Boot event log does not replay to quoted PCR ${pcr}`)
+-		}
+-	}
+-	return verified.sort((a, b) => a.sequence - b.sequence)
+-}
+-
+-function parseVariable(data: Buffer): { name: string, value: Buffer } {
+-	const r = new LEReader(data)
+-	r.bytes(16, 'UEFI variable GUID')
+-	const nameLength = r.u64('UEFI variable name length')
+-	const dataLength = r.u64('UEFI variable data length')
+-	if(nameLength > BigInt(MAX_VARIABLE_NAME) || dataLength > BigInt(MAX_VARIABLE_DATA)) {
+-		throw new Error('UEFI variable exceeds parser limits')
+-	}
+-	const nameBytes = Number(nameLength) * 2
+-	const name = r.bytes(nameBytes, 'UEFI variable name').toString('utf16le')
+-	const value = r.bytes(Number(dataLength), 'UEFI variable data')
+-	if(r.remaining() !== 0) {throw new Error(`UEFI variable ${name} has trailing data`)}
+-	return { name, value }
+-}
+-
+-function parseSignatureDatabase(data: Buffer): SignatureDatabase {
+-	const certs: X509Certificate[] = []
+-	const hashes: Buffer[] = []
+-	let offset = 0
+-	while(offset < data.length) {
+-		if(data.length - offset < 28) {throw new Error('truncated EFI signature list')}
+-		const type = data.subarray(offset, offset + 16).toString('hex')
+-		const listSize = data.readUInt32LE(offset + 16)
+-		const headerSize = data.readUInt32LE(offset + 20)
+-		const signatureSize = data.readUInt32LE(offset + 24)
+-		if(listSize < 28 + headerSize || listSize > data.length - offset || signatureSize <= 16) {
+-			throw new Error('invalid EFI signature list sizes')
+-		}
+-		const start = offset + 28 + headerSize
+-		const end = offset + listSize
+-		if((end - start) % signatureSize !== 0) {throw new Error('misaligned EFI signature list')}
+-		for(let entry = start; entry < end; entry += signatureSize) {
+-			const value = data.subarray(entry + 16, entry + signatureSize)
+-			if(type === EFI_CERT_X509_GUID) {certs.push(new X509Certificate(value))}
+-			else if(type === EFI_CERT_SHA256_GUID && value.length === 32) {hashes.push(Buffer.from(value))}
+-			else {throw new Error(`unsupported EFI signature type ${type}`)}
+-		}
+-		offset = end
+-	}
+-	return { certs, hashes }
+-}
+-
+-function parseAuthority(data: Buffer): X509Certificate {
+-	const { value } = parseVariable(data)
+-	if(value.length <= 16) {throw new Error('EFI variable authority is truncated')}
+-	return new X509Certificate(value.subarray(16))
+-}
+-
+-function certificateUsesReleaseKey(cert: X509Certificate): boolean {
+-	const spki = Buffer.from(cert.publicKey.export({ type: 'spki', format: 'der' }))
+-	return spki.equals(RELEASE_SPKI)
+-}
+-
+-function dataDigestValid(event: TcgEvent, bank: Bank): boolean {
+-	const id = bankAlgorithm(bank).id
+-	const measured = event.digests.find(d => d.alg === id)?.value
+-	return !!measured && measured.equals(createHash(bank).update(event.data).digest())
+-}
+-
+-function verifyAuthorityPolicy(events: TcgEvent[], bank: Bank): number {
+-	let enabled = false
+-	let seenSeparator = false
+-	let seenAuthority = false
+-	const seenVariables = new Set<string>()
+-	let pk: SignatureDatabase = { certs: [], hashes: [] }
+-	let kek: SignatureDatabase = { certs: [], hashes: [] }
+-	let db: SignatureDatabase = { certs: [], hashes: [] }
+-	let dbx: SignatureDatabase = { certs: [], hashes: [] }
+-	const preAuthorities: X509Certificate[] = []
+-	const postAuthorities: X509Certificate[] = []
+-
+-	for(const event of events) {
+-		if(event.pcr !== 7) {continue}
+-		switch(event.type) {
+-		case EV_SEPARATOR:
+-			if(seenSeparator) {throw new Error('duplicate PCR 7 separator')}
+-			seenSeparator = true
+-			if(!event.data.equals(Buffer.alloc(4)) || !dataDigestValid(event, bank)) {
+-				throw new Error('invalid PCR 7 separator')
+-			}
+-			break
+-		case EV_EFI_ACTION: {
+-			const action = event.data.toString('utf8')
+-			if(action === 'UEFI Debug Mode') {throw new Error('UEFI debugger was present during boot')}
+-			if(action !== 'DMA Protection Disabled' || !dataDigestValid(event, bank)) {
+-				throw new Error(`unexpected PCR 7 EFI action ${JSON.stringify(action)}`)
+-			}
+-			break
+-		}
+-		case EV_EFI_VARIABLE_DRIVER_CONFIG: {
+-			const variable = parseVariable(event.data)
+-			if(seenVariables.has(variable.name)) {throw new Error(`duplicate UEFI variable ${variable.name}`)}
+-			seenVariables.add(variable.name)
+-			if(seenSeparator) {throw new Error(`UEFI variable ${variable.name} appears after separator`)}
+-			if(!dataDigestValid(event, bank)) {throw new Error(`invalid digest for UEFI variable ${variable.name}`)}
+-			switch(variable.name) {
+-			case 'SecureBoot':
+-				if(variable.value.length !== 1) {throw new Error('SecureBoot variable has invalid length')}
+-				enabled = variable.value[0] === 1
+-				break
+-			case 'PK': pk = parseSignatureDatabase(variable.value); break
+-			case 'KEK': kek = parseSignatureDatabase(variable.value); break
+-			case 'db': db = parseSignatureDatabase(variable.value); break
+-			case 'dbx': dbx = parseSignatureDatabase(variable.value); break
+-			}
+-			break
+-		}
+-		case EV_EFI_VARIABLE_AUTHORITY: {
+-			const authority = parseAuthority(event.data)
+-			seenAuthority = true
+-			if(!dataDigestValid(event, bank)) {throw new Error('invalid digest for UEFI authority')}
+-			if(seenSeparator) {postAuthorities.push(authority)}
+-			else {preAuthorities.push(authority)}
+-			break
+-		}
+-		default:
+-			throw new Error(`unexpected PCR 7 event type 0x${event.type.toString(16)}`)
+-		}
+-	}
+-
+-	if(!enabled) {throw new Error('Secure Boot is not enabled')}
+-	if(!seenAuthority) {throw new Error('Secure Boot enabled but no key was used')}
+-	if(pk.certs.length + pk.hashes.length === 0) {throw new Error('Secure Boot platform key is missing')}
+-	if(kek.certs.length + kek.hashes.length === 0) {throw new Error('Secure Boot key exchange key is missing')}
+-	if(db.certs.length !== 1 || db.hashes.length !== 0 || !certificateUsesReleaseKey(db.certs[0])) {
+-		throw new Error('Secure Boot db is not R-only')
+-	}
+-	if(dbx.certs.some(certificateUsesReleaseKey)) {throw new Error('Secure Boot release key R is forbidden by dbx')}
+-	if(preAuthorities.length !== 0) {throw new Error('Secure Boot used a pre-separator authority')}
+-	if(postAuthorities.length === 0 || !postAuthorities.every(certificateUsesReleaseKey)) {
+-		throw new Error('not every post-separator Secure Boot authority is R')
+-	}
+-	return postAuthorities.length
+-}
+-
+-export function verifySecureBootEventLog(
+-	raw: Uint8Array,
+-	quotedPcrs: Map<number, Buffer>,
+-	bank: Bank
+-): SecureBootEventLogResult {
+-	const events = parseEventLog(raw)
+-	const verified = replay(events, quotedPcrs, bank)
+-	const postSeparatorUses = verifyAuthorityPolicy(verified, bank)
+-	return {
+-		eventLogBytes: raw.length,
+-		verifiedEvents: verified.length,
+-		postSeparatorUses,
+-		releasePublicKeySha256: createHash('sha256').update(RELEASE_SPKI).digest('hex'),
+-	}
+-}
+diff --git a/src/server/utils/tee-cbc-contract.ts b/src/server/utils/tee-cbc-contract.ts
+deleted file mode 100644
+index a102903..0000000
+--- a/src/server/utils/tee-cbc-contract.ts
++++ /dev/null
+@@ -1,418 +0,0 @@
+-import type {
+-	KOutputPayload,
+-	RequestRedactionRange,
+-	ResponseRedactionRange,
+-	TLS12CBCSessionBinding,
+-	TOutputPayload,
+-	VerificationBundle,
+-} from '#src/proto/tee-bundle.ts'
+-import { TLS12CBCRecordMode } from '#src/proto/tee-bundle.ts'
+-import { AttestorError } from '#src/utils/error.ts'
+-
+-export type TeeProtocolMode = 'split-aead' | 'tls12-cbc'
+-
+-const TLS12_CBC_CONTRACT_VERSION = 1
+-const TLS12_CBC_BINDING_SIZE = 32
+-const TLS12_CBC_DIGEST_SIZE = 32
+-const TLS12_MAX_PLAINTEXT = 16_384
+-const TLS12_MAX_RECORDS = 500
+-const MAX_REQUEST_REDACTIONS = 1_000
+-const MAX_RESPONSE_REDACTIONS = 1_000
+-const REDACTION_CHAR_CODE = 42
+-
+-const TLS12_CBC_CIPHER_SUITES = new Set([
+-	0xc009,
+-	0xc013,
+-	0xc00a,
+-	0xc014,
+-	0xc023,
+-	0xc027,
+-	0xc024,
+-	0xc028,
+-	0x002f,
+-	0x0035,
+-	0x003c,
+-	0x003d,
+-])
+-
+-export function validateTeeTranscriptContract(
+-	bundle: VerificationBundle,
+-	kPayload: KOutputPayload,
+-	tPayload: TOutputPayload,
+-): TeeProtocolMode {
+-	const hasKContract = kPayload.tls12Cbc !== undefined
+-	const hasTContract = tPayload.tls12Cbc !== undefined
+-
+-	if(hasKContract !== hasTContract) {
+-		throw invalidClaim('TLS 1.2 CBC contract must be present in both TEE payloads')
+-	}
+-
+-	if(!hasKContract || !hasTContract) {
+-		validateLegacyContract(kPayload, tPayload)
+-		return 'split-aead'
+-	}
+-
+-	validateTls12CbcContract(bundle, kPayload, tPayload)
+-	return 'tls12-cbc'
+-}
+-
+-function validateLegacyContract(kPayload: KOutputPayload, tPayload: TOutputPayload): void {
+-	if(kPayload.consolidatedResponseKeystream.length === 0) {
+-		throw invalidClaim('Missing consolidated response keystream in TEE_K payload')
+-	}
+-
+-	if(tPayload.consolidatedResponseCiphertext.length === 0) {
+-		throw invalidClaim('Missing consolidated response ciphertext in TEE_T payload')
+-	}
+-}
+-
+-function validateTls12CbcContract(
+-	bundle: VerificationBundle,
+-	kPayload: KOutputPayload,
+-	tPayload: TOutputPayload,
+-): void {
+-	const kContract = kPayload.tls12Cbc!
+-	const tContract = tPayload.tls12Cbc!
+-
+-	if(kPayload.redactedRequest.length !== 0 || kPayload.requestRedactionRanges.length !== 0 ||
+-		kPayload.consolidatedResponseKeystream.length !== 0 || kPayload.responseRedactionRanges.length !== 0) {
+-		throw invalidClaim('TEE_K TLS 1.2 CBC output mixes legacy split-AEAD fields')
+-	}
+-
+-	if(tPayload.consolidatedResponseCiphertext.length !== 0 || tPayload.requestProofStreams.length !== 0) {
+-		throw invalidClaim('TEE_T TLS 1.2 CBC output mixes legacy split-AEAD fields')
+-	}
+-
+-	if(bundle.oprfVerifications.length !== 0) {
+-		throw invalidClaim('TLS 1.2 CBC does not support legacy ZK TOPRF verification data')
+-	}
+-
+-	validateBinding(kContract.binding, 'TEE_K')
+-	validateBinding(tContract.binding, 'TEE_T')
+-	if(!bindingsEqual(kContract.binding!, tContract.binding!)) {
+-		throw invalidClaim('TLS 1.2 CBC session binding mismatch between TEE_K and TEE_T')
+-	}
+-
+-	if(kContract.authenticatedRedactedRequest.length === 0 ||
+-		kContract.authenticatedRedactedRequest.length > TLS12_MAX_PLAINTEXT) {
+-		throw invalidClaim('Invalid TLS 1.2 CBC authenticated request length')
+-	}
+-
+-	if(kContract.requestRecordsSha256.length !== TLS12_CBC_DIGEST_SIZE) {
+-		throw invalidClaim('TLS 1.2 CBC request record digest must be 32 bytes')
+-	}
+-
+-	validateRequestRanges(kContract.requestRedactionRanges, kContract.authenticatedRedactedRequest.length)
+-
+-	const responseLength = tContract.authenticatedRedactedResponse.length
+-	if(responseLength === 0 || responseLength > TLS12_MAX_RECORDS * TLS12_MAX_PLAINTEXT) {
+-		throw invalidClaim('Invalid TLS 1.2 CBC authenticated response length')
+-	}
+-
+-	if(tContract.responseRecordsSha256.length !== TLS12_CBC_DIGEST_SIZE) {
+-		throw invalidClaim('TLS 1.2 CBC response record digest must be 32 bytes')
+-	}
+-
+-	validateResponseRanges(tContract.responseRedactionRanges, responseLength)
+-	validatePlaintextRecordLengths(tContract.plaintextRecordLengths, responseLength)
+-	validateTls12CbcHttpResponseFraming(
+-		tContract.authenticatedRedactedResponse,
+-		tContract.responseRedactionRanges,
+-		tContract.closeNotify,
+-	)
+-}
+-
+-function validateTls12CbcHttpResponseFraming(
+-	response: Uint8Array,
+-	ranges: ResponseRedactionRange[],
+-	closeNotify: boolean,
+-): void {
+-	const visible = new Uint8Array(response)
+-	const redacted = new Uint8Array(response.length)
+-	for(const range of ranges) {
+-		visible.fill(REDACTION_CHAR_CODE, range.start, range.start + range.length)
+-		redacted.fill(1, range.start, range.start + range.length)
+-	}
+-
+-	const headerEnd = findSequence(visible, [13, 10, 13, 10], 0)
+-	if(headerEnd < 0) {
+-		throw invalidClaim('TLS 1.2 CBC response has incomplete HTTP headers')
+-	}
+-
+-	const headerLines = bytesToAscii(visible.slice(0, headerEnd)).split('\r\n')
+-	if(!/^HTTP\/1\.[01] [1-5][0-9][0-9](?: .*)?$/.test(headerLines[0] || '')) {
+-		throw invalidClaim('TLS 1.2 CBC response has an invalid HTTP status line')
+-	}
+-	if(hasRedactedByte(redacted, 0, headerLines[0].length + 2)) {
+-		throw invalidClaim('TLS 1.2 CBC response redacts HTTP status framing')
+-	}
+-
+-	const contentLengths: string[] = []
+-	const transferEncodings: string[] = []
+-	let lineStart = headerLines[0].length + 2
+-	for(const line of headerLines.slice(1)) {
+-		const separator = line.indexOf(':')
+-		if(separator <= 0) {
+-			throw invalidClaim('TLS 1.2 CBC response has an invalid HTTP header')
+-		}
+-		const name = line.slice(0, separator).toLowerCase()
+-		if(!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+-			throw invalidClaim('TLS 1.2 CBC response has an invalid HTTP header name')
+-		}
+-		let valueStart = separator + 1
+-		while(valueStart < line.length && (line[valueStart] === ' ' || line[valueStart] === '\t')) {
+-			valueStart++
+-		}
+-		const lineEnd = lineStart + line.length
+-		if(hasRedactedByte(redacted, lineStart, lineStart + valueStart) ||
+-			hasRedactedByte(redacted, lineEnd, lineEnd + 2)) {
+-			throw invalidClaim('TLS 1.2 CBC response redacts HTTP header structure')
+-		}
+-		const value = line.slice(valueStart)
+-		if(name === 'content-length') {
+-			if(hasRedactedByte(redacted, lineStart, lineEnd)) {
+-				throw invalidClaim('TLS 1.2 CBC response redacts a framing header')
+-			}
+-			contentLengths.push(value)
+-		} else if(name === 'transfer-encoding') {
+-			if(hasRedactedByte(redacted, lineStart, lineEnd)) {
+-				throw invalidClaim('TLS 1.2 CBC response redacts a framing header')
+-			}
+-			transferEncodings.push(value)
+-		}
+-		lineStart = lineEnd + 2
+-	}
+-	if(hasRedactedByte(redacted, headerEnd + 2, headerEnd + 4)) {
+-		throw invalidClaim('TLS 1.2 CBC response redacts the HTTP header terminator')
+-	}
+-
+-	if(contentLengths.length > 1 || transferEncodings.length > 1 ||
+-		(contentLengths.length > 0 && transferEncodings.length > 0)) {
+-		throw invalidClaim('TLS 1.2 CBC response has ambiguous HTTP framing')
+-	}
+-
+-	const bodyStart = headerEnd + 4
+-	if(transferEncodings.length === 1) {
+-		const codings = transferEncodings[0].split(',').map(value => value.trim().toLowerCase())
+-		if(codings.some(value => value.length === 0)) {
+-			throw invalidClaim('TLS 1.2 CBC response has an invalid Transfer-Encoding')
+-		}
+-		const chunkedIndex = codings.indexOf('chunked')
+-		if(chunkedIndex >= 0) {
+-			if(chunkedIndex !== codings.length - 1) {
+-				throw invalidClaim('TLS 1.2 CBC response has invalid Transfer-Encoding order')
+-			}
+-			validateCompleteChunkedBody(visible, bodyStart)
+-			return
+-		}
+-		if(!closeNotify) {
+-			throw invalidClaim('TLS 1.2 CBC close-delimited response is missing authenticated close_notify')
+-		}
+-		return
+-	}
+-
+-	if(contentLengths.length === 1) {
+-		const value = contentLengths[0]
+-		if(!/^[0-9]+$/.test(value)) {
+-			throw invalidClaim('TLS 1.2 CBC response has an invalid Content-Length')
+-		}
+-		const contentLength = Number(value)
+-		if(!Number.isSafeInteger(contentLength) || bodyStart + contentLength !== visible.length) {
+-			throw invalidClaim('TLS 1.2 CBC response does not match its Content-Length')
+-		}
+-		return
+-	}
+-
+-	if(!closeNotify) {
+-		throw invalidClaim('TLS 1.2 CBC close-delimited response is missing authenticated close_notify')
+-	}
+-}
+-
+-function validateCompleteChunkedBody(response: Uint8Array, bodyStart: number): void {
+-	let offset = bodyStart
+-	for(;;) {
+-		const lineEnd = findSequence(response, [13, 10], offset)
+-		if(lineEnd < 0) {
+-			throw invalidClaim('TLS 1.2 CBC chunked response has an incomplete size line')
+-		}
+-		const sizeLine = bytesToAscii(response.slice(offset, lineEnd))
+-		const separator = sizeLine.indexOf(';')
+-		const sizeText = (separator < 0 ? sizeLine : sizeLine.slice(0, separator)).trim()
+-		if(!/^[0-9a-fA-F]+$/.test(sizeText)) {
+-			throw invalidClaim('TLS 1.2 CBC chunked response has an invalid chunk size')
+-		}
+-		const chunkSize = Number.parseInt(sizeText, 16)
+-		if(!Number.isSafeInteger(chunkSize)) {
+-			throw invalidClaim('TLS 1.2 CBC chunked response has an invalid chunk size')
+-		}
+-		offset = lineEnd + 2
+-
+-		if(chunkSize === 0) {
+-			for(;;) {
+-				const trailerStart = offset
+-				const trailerEnd = findSequence(response, [13, 10], offset)
+-				if(trailerEnd < 0) {
+-					throw invalidClaim('TLS 1.2 CBC chunked response has incomplete trailers')
+-				}
+-				offset = trailerEnd + 2
+-				if(trailerEnd === trailerStart) {
+-					if(offset !== response.length) {
+-						throw invalidClaim('TLS 1.2 CBC chunked response has trailing bytes')
+-					}
+-					return
+-				}
+-			}
+-		}
+-
+-		if(chunkSize > response.length - offset - 2) {
+-			throw invalidClaim('TLS 1.2 CBC chunked response body is truncated')
+-		}
+-		offset += chunkSize
+-		if(offset + 2 > response.length || response[offset] !== 13 || response[offset + 1] !== 10) {
+-			throw invalidClaim('TLS 1.2 CBC chunked response is missing a data terminator')
+-		}
+-		offset += 2
+-	}
+-}
+-
+-function findSequence(data: Uint8Array, sequence: number[], start: number): number {
+-	outer: for(let index = start; index <= data.length - sequence.length; index++) {
+-		for(let offset = 0; offset < sequence.length; offset++) {
+-			if(data[index + offset] !== sequence[offset]) {
+-				continue outer
+-			}
+-		}
+-		return index
+-	}
+-	return -1
+-}
+-
+-function bytesToAscii(data: Uint8Array): string {
+-	let result = ''
+-	for(const value of data) {
+-		result += String.fromCharCode(value)
+-	}
+-	return result
+-}
+-
+-function hasRedactedByte(mask: Uint8Array, start: number, end: number): boolean {
+-	for(let index = start; index < end; index++) {
+-		if(mask[index] !== 0) {
+-			return true
+-		}
+-	}
+-	return false
+-}
+-
+-function validateBinding(binding: TLS12CBCSessionBinding | undefined, owner: string): void {
+-	if(!binding) {
+-		throw invalidClaim(`${owner} TLS 1.2 CBC binding is missing`)
+-	}
+-
+-	if(binding.contractVersion !== TLS12_CBC_CONTRACT_VERSION) {
+-		throw invalidClaim(`${owner} TLS 1.2 CBC contract version is unsupported`)
+-	}
+-
+-	if(!TLS12_CBC_CIPHER_SUITES.has(binding.cipherSuite)) {
+-		throw invalidClaim(`${owner} TLS 1.2 CBC cipher suite is unsupported`)
+-	}
+-
+-	if(binding.recordMode !== TLS12CBCRecordMode.TLS12_CBC_RECORD_MODE_MAC_THEN_ENCRYPT &&
+-		binding.recordMode !== TLS12CBCRecordMode.TLS12_CBC_RECORD_MODE_ENCRYPT_THEN_MAC) {
+-		throw invalidClaim(`${owner} TLS 1.2 CBC record mode is invalid`)
+-	}
+-
+-	if(binding.sessionBinding.length !== TLS12_CBC_BINDING_SIZE) {
+-		throw invalidClaim(`${owner} TLS 1.2 CBC session binding must be 32 bytes`)
+-	}
+-}
+-
+-function bindingsEqual(a: TLS12CBCSessionBinding, b: TLS12CBCSessionBinding): boolean {
+-	return a.contractVersion === b.contractVersion &&
+-		a.cipherSuite === b.cipherSuite &&
+-		a.recordMode === b.recordMode &&
+-		a.extendedMasterSecret === b.extendedMasterSecret &&
+-		bytesEqual(a.sessionBinding, b.sessionBinding)
+-}
+-
+-function validateRequestRanges(ranges: RequestRedactionRange[], requestLength: number): void {
+-	if(ranges.length > MAX_REQUEST_REDACTIONS) {
+-		throw invalidClaim('Too many TLS 1.2 CBC request redaction ranges')
+-	}
+-
+-	for(const [index, range] of ranges.entries()) {
+-		if(range.start < 0 || range.length <= 0 || range.start > requestLength ||
+-			range.length > requestLength - range.start) {
+-			throw invalidClaim(`TLS 1.2 CBC request redaction range ${index} is out of bounds`)
+-		}
+-
+-		if(range.type !== 'sensitive' && range.type !== 'sensitive_proof') {
+-			throw invalidClaim(`TLS 1.2 CBC request redaction range ${index} has invalid type`)
+-		}
+-	}
+-
+-	validateNoOverlap(ranges, 'request')
+-}
+-
+-function validateResponseRanges(ranges: ResponseRedactionRange[], responseLength: number): void {
+-	if(ranges.length > MAX_RESPONSE_REDACTIONS) {
+-		throw invalidClaim('Too many TLS 1.2 CBC response redaction ranges')
+-	}
+-
+-	for(const [index, range] of ranges.entries()) {
+-		if(range.start < 0 || range.length <= 0 || range.start > responseLength ||
+-			range.length > responseLength - range.start) {
+-			throw invalidClaim(`TLS 1.2 CBC response redaction range ${index} is out of bounds`)
+-		}
+-	}
+-
+-	validateNoOverlap(ranges, 'response')
+-}
+-
+-function validateNoOverlap(
+-	ranges: Array<{ start: number, length: number }>,
+-	direction: 'request' | 'response',
+-): void {
+-	const sorted = [...ranges].sort((a, b) => a.start - b.start)
+-	for(let i = 1; i < sorted.length; i++) {
+-		const previous = sorted[i - 1]
+-		const current = sorted[i]
+-		if(current.start < previous.start + previous.length) {
+-			throw invalidClaim(`TLS 1.2 CBC ${direction} redaction ranges overlap`)
+-		}
+-	}
+-}
+-
+-function validatePlaintextRecordLengths(lengths: number[], responseLength: number): void {
+-	if(lengths.length === 0 || lengths.length > TLS12_MAX_RECORDS) {
+-		throw invalidClaim('Invalid TLS 1.2 CBC plaintext record count')
+-	}
+-
+-	let total = 0
+-	for(const [index, length] of lengths.entries()) {
+-		if(length < 0 || length > TLS12_MAX_PLAINTEXT) {
+-			throw invalidClaim(`TLS 1.2 CBC plaintext record length ${index} is invalid`)
+-		}
+-		total += length
+-	}
+-
+-	if(total !== responseLength) {
+-		throw invalidClaim('TLS 1.2 CBC plaintext record lengths do not match the authenticated response')
+-	}
+-}
+-
+-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+-	if(a.length !== b.length) {
+-		return false
+-	}
+-
+-	let difference = 0
+-	for(let i = 0; i < a.length; i++) {
+-		difference |= a[i] ^ b[i]
+-	}
+-	return difference === 0
+-}
+-
+-function invalidClaim(message: string): AttestorError {
+-	return new AttestorError('ERROR_INVALID_CLAIM', message)
+-}
+diff --git a/src/tests/admission-diagnostics.test.ts b/src/tests/admission-diagnostics.test.ts
+index d5b11d1..126e00f 100644
+--- a/src/tests/admission-diagnostics.test.ts
++++ b/src/tests/admission-diagnostics.test.ts
+@@ -3,7 +3,8 @@ import { spawnSync } from 'node:child_process'
+ import { after, describe, it, mock } from 'node:test'
+ import { Wallet } from 'ethers'
+ 
+-import { inputContext, signedContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, signedContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_IDENTITY_PROVIDER, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
++import { SEC_HARDENING_REASONS } from '#src/tests/utils/sec-hardening-reasons.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ process.env.CLAIM_CHAIN_IDS = '10143'
+@@ -80,7 +81,7 @@ function tunnel(createRequest: Record<string, unknown> = {}, transcript: unknown
+ 
+ function claimClient(overrides: Record<string, unknown> = {}) {
+ 	return {
+-		authIdentity: TEST_SESSION_ID,
++		authIdentity: testAuthIdentity(),
+ 		authHostWhitelist: ['example.com'],
+ 		metadata: { signatureType: ETH, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 		tunnels: {},
+@@ -139,17 +140,19 @@ describe('CLAIM_CHAIN_IDS', () => {
+ 			`sandbox:%c:${TEST_CONTEXT_ADDRESS}:3f2b6c1e-8d4a-4b7c-9e2f-1a2b3c4d5e6f`
+ 		]
+ 		for(const form of forms) {
+-			const raw = (chain: string) => JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: form.replace('%c', chain), reclaimSessionId: TEST_SESSION_ID })
+-			assert.equal(assertSupportedInputContext(raw('84532'), TEST_SESSION_ID, ['84532', '10143']).reclaimSessionId, TEST_SESSION_ID)
+-			assert.throws(() => assertSupportedInputContext(raw('84532'), TEST_SESSION_ID, TEST_CHAIN_IDS), (err: unknown) => rejectionReason(err) === 'CLAIM_CONTEXT_CHAIN_NOT_ALLOWED')
+-			assert.throws(() => assertSupportedInputContext(raw('010143'), TEST_SESSION_ID, TEST_CHAIN_IDS), (err: unknown) => rejectionReason(err) === 'CLAIM_CONTEXT_MESSAGE_UNSUPPORTED')
++			const message = (chain: string) => form.replace('%c', chain)
++			const raw = (chain: string) => JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: message(chain), identityProvider: TEST_IDENTITY_PROVIDER, reclaimSessionId: TEST_SESSION_ID })
++			assert.equal(assertSupportedInputContext(raw('84532'), testAuthIdentity(message('84532')), ['84532', '10143']).reclaimSessionId, TEST_SESSION_ID)
++			assert.throws(() => assertSupportedInputContext(raw('84532'), testAuthIdentity(message('84532')), TEST_CHAIN_IDS), (err: unknown) => rejectionReason(err) === 'CLAIM_CONTEXT_CHAIN_NOT_ALLOWED')
++			assert.throws(() => assertSupportedInputContext(raw('010143'), testAuthIdentity(message('010143')), TEST_CHAIN_IDS), (err: unknown) => rejectionReason(err) === 'CLAIM_CONTEXT_MESSAGE_UNSUPPORTED')
+ 		}
+ 	})
+ })
+ 
+ describe('finite rejection reasons', () => {
+ 	after(() => {
+-		assert.deepEqual([...exercised].sort(), Object.keys(REJECTION_REASONS).sort(), 'a reason in the table has no test')
++		const reasons = Object.keys(REJECTION_REASONS).filter(reason => !SEC_HARDENING_REASONS.includes(reason))
++		assert.deepEqual([...exercised].sort(), reasons.sort(), 'a reason in the table has no test')
+ 	})
+ 
+ 	it('labels auth failures', async() => {
+@@ -191,9 +194,9 @@ describe('finite rejection reasons', () => {
+ 		await expectReason('CLAIM_CONTEXT_SESSION_MISMATCH', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest(inputContext('another-session')), ctx(claimClient())))
+ 		const otherChain = inputContext().replace(':10143:', ':84532:')
+ 		await expectReason('CLAIM_CONTEXT_CHAIN_NOT_ALLOWED', 'ERROR_BAD_REQUEST', () => claimTunnel(claimRequest(otherChain), ctx(claimClient())))
+-		const freeText = JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: 'Auction verification', reclaimSessionId: TEST_SESSION_ID })
+-		await expectReason('CLAIM_CONTEXT_MESSAGE_UNSUPPORTED', 'ERROR_BAD_REQUEST', () => assertSupportedInputContext(freeText, TEST_SESSION_ID, TEST_CHAIN_IDS))
+-		const accepted = assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS)
++		const freeText = JSON.stringify({ contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: 'Auction verification', identityProvider: TEST_IDENTITY_PROVIDER, reclaimSessionId: TEST_SESSION_ID })
++		await expectReason('CLAIM_CONTEXT_MESSAGE_UNSUPPORTED', 'ERROR_BAD_REQUEST', () => assertSupportedInputContext(freeText, testAuthIdentity('Auction verification'), TEST_CHAIN_IDS))
++		const accepted = assertSupportedInputContext(inputContext(), testAuthIdentity(), TEST_CHAIN_IDS)
+ 		await expectReason('SIGNED_CONTEXT_INVALID', 'ERROR_BAD_REQUEST', () => assertSupportedSignedContext(signedContext('synthetic', 'another-session'), accepted))
+ 		await expectReason('AUTH_EXPIRED', 'ERROR_AUTHENTICATION_FAILED', () => claimTunnel(claimRequest(), ctx(claimClient({ assertAuthActive() { throw authExpiredError() } }))))
+ 		await expectReason('TEE_CLAIMS_DISABLED', 'ERROR_BAD_REQUEST', () => claimTeeBundle({} as any, ctx(claimClient())))
+diff --git a/src/tests/auth-signing-deadline.test.ts b/src/tests/auth-signing-deadline.test.ts
+index 005e736..268f286 100644
+--- a/src/tests/auth-signing-deadline.test.ts
++++ b/src/tests/auth-signing-deadline.test.ts
+@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
+ import { describe, it, mock } from 'node:test'
+ 
+ import { AttestorError } from '#src/utils/error.ts'
+-import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, signedContext, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ 
+@@ -46,7 +46,7 @@ function deferred() {
+ function setup() {
+ 	let now = 9
+ 	const client = {
+-		authIdentity: TEST_SESSION_ID,
++		authIdentity: testAuthIdentity(),
+ 		authHostWhitelist: Object.freeze(['example.com']),
+ 		metadata: { signatureType, clientVersion: AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 		assertAuthActive() {
+diff --git a/src/tests/claim-epoch.test.ts b/src/tests/claim-epoch.test.ts
+index 8534335..9ed2f97 100644
+--- a/src/tests/claim-epoch.test.ts
++++ b/src/tests/claim-epoch.test.ts
+@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
+ import { describe, it, mock } from 'node:test'
+ 
+ import type { ClaimTunnelResponse } from '#src/proto/api.ts'
+-import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, signedContext, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ 
+@@ -38,7 +38,7 @@ const signatureType = proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH
+ const verify = signatures.SIGNATURES[signatureType].verify
+ const wrongSigner = '0x0000000000000000000000000000000000000002'
+ const client = {
+-	authIdentity: TEST_SESSION_ID,
++	authIdentity: testAuthIdentity(),
+ 	authHostWhitelist: Object.freeze(['example.com']),
+ 	metadata: { signatureType, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 	assertAuthActive() {},
+diff --git a/src/tests/extracted-key.test.ts b/src/tests/extracted-key.test.ts
+index 30e8e0c..6736dbd 100644
+--- a/src/tests/extracted-key.test.ts
++++ b/src/tests/extracted-key.test.ts
+@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
+ import { it } from 'node:test'
+ 
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { inputContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_IDENTITY_PROVIDER, TEST_PROVIDER_HASH, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ 
+ // Value-equal to @umia/types proof-context.extraction-key-vectors.json; a repo test enforces it.
+ const keys = JSON.parse(
+@@ -14,12 +14,13 @@ function signed(key: string) {
+ 	return JSON.stringify({
+ 		contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: TEST_CONTEXT_MESSAGE,
+ 		extractedParameters: { [key]: 'synthetic' },
++		identityProvider: TEST_IDENTITY_PROVIDER,
+ 		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
+ 	})
+ }
+ 
+ it('signs exactly the shared extraction key vectors', () => {
+-	const input = assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS)
++	const input = assertSupportedInputContext(inputContext(), testAuthIdentity(), TEST_CHAIN_IDS)
+ 	for(const key of keys.accepted) {
+ 		assert.doesNotThrow(() => assertSupportedSignedContext(signed(key), input), key)
+ 	}
+diff --git a/src/tests/fixtures/go-charset-prefix-limits.json b/src/tests/fixtures/go-charset-prefix-limits.json
+deleted file mode 100644
+index 0bb813b..0000000
+--- a/src/tests/fixtures/go-charset-prefix-limits.json
++++ /dev/null
+@@ -1,48 +0,0 @@
+-[
+-  {
+-    "cbc": false,
+-    "match": "Привет",
+-    "redactions": [
+-      {
+-        "length": 2,
+-        "start": 15
+-      },
+-      {
+-        "length": 20,
+-        "start": 40
+-      },
+-      {
+-        "length": 12,
+-        "start": 64
+-      },
+-      {
+-        "length": 19,
+-        "start": 103
+-      },
+-      {
+-        "length": 21,
+-        "start": 128
+-      }
+-    ],
+-    "response": "SFRUUC8xLjEgMjAwIE9LKipDb250ZW50LVR5cGU6IHRleHQvaHRtbCoqKioqKioqKioqKioqKioqKioqDQoNCioqKioqKioqKioqKjxtZXRhIGNoYXJzZXQ9d2luZG93cy0xMjUxPioqKioqKioqKioqKioqKioqKirP8Oji5fIqKioqKioqKioqKioqKioqKioqKio="
+-  },
+-  {
+-    "cbc": true,
+-    "match": "Привет",
+-    "redactions": [
+-      {
+-        "length": 12,
+-        "start": 64
+-      },
+-      {
+-        "length": 19,
+-        "start": 103
+-      },
+-      {
+-        "length": 21,
+-        "start": 128
+-      }
+-    ],
+-    "response": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvaHRtbA0KQ29udGVudC1MZW5ndGg6IDg1DQoNCioqKioqKioqKioqKjxtZXRhIGNoYXJzZXQ9d2luZG93cy0xMjUxPioqKioqKioqKioqKioqKioqKirP8Oji5fIqKioqKioqKioqKioqKioqKioqKio="
+-  }
+-]
+\ No newline at end of file
+diff --git a/src/tests/host-extraction-provenance.test.ts b/src/tests/host-extraction-provenance.test.ts
+index ddea881..159d20b 100644
+--- a/src/tests/host-extraction-provenance.test.ts
++++ b/src/tests/host-extraction-provenance.test.ts
+@@ -4,7 +4,7 @@ import { it, mock } from 'node:test'
+ import { providers } from '#src/providers/index.ts'
+ import { assertValidProviderTranscript } from '#src/server/utils/assert-valid-claim-request.ts'
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { inputContext, TEST_CHAIN_IDS, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ 
+ const logger = { info() {}, debug() {}, warn() {}, error() {} }
+ const parameters = JSON.stringify({
+@@ -29,7 +29,8 @@ it('requires nonempty mocked provider extraction through real context mutation',
+ 			logger as any, { version: 1 } as any
+ 		)
+ 		assert.equal(receipt.mock.calls.length, 1)
+-		assertSupportedSignedContext(result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS))
++		const hash = JSON.parse(result.context).providerHash as string
++		assertSupportedSignedContext(result.context, assertSupportedInputContext(inputContext(), testAuthIdentity(TEST_CONTEXT_MESSAGE, TEST_CONTEXT_ADDRESS, TEST_SESSION_ID, hash), TEST_CHAIN_IDS))
+ 		assert.deepEqual(JSON.parse(result.context).extractedParameters,
+ 			{ account: 'synthetic-commitment' })
+ 	} finally {
+@@ -47,7 +48,7 @@ it('requires nonempty mocked provider extraction through real context mutation',
+ 		assert.equal(emptyReceipt.mock.calls.length, 1)
+ 		assert.equal(Object.hasOwn(JSON.parse(result.context), 'extractedParameters'), false)
+ 		assert.throws(() => assertSupportedSignedContext(
+-			result.context, assertSupportedInputContext(inputContext(), TEST_SESSION_ID, TEST_CHAIN_IDS)
++			result.context, assertSupportedInputContext(inputContext(), testAuthIdentity(), TEST_CHAIN_IDS)
+ 		), /Unsupported claim context/)
+ 	} finally {
+ 		emptyReceipt.mock.restore()
+diff --git a/src/tests/host-policy.test.ts b/src/tests/host-policy.test.ts
+index e675a1f..5efb106 100644
+--- a/src/tests/host-policy.test.ts
++++ b/src/tests/host-policy.test.ts
+@@ -7,7 +7,7 @@ import type { ProviderClaimInfo } from '#src/proto/api.ts'
+ import { canonicalStringify, createSignDataForClaim } from '#src/utils/claims.ts'
+ import { SIGNATURES } from '#src/utils/signatures/index.ts'
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { inputContext, signedContext, TEST_AUCTION_ADDRESS, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, signedContext, TEST_AUCTION_ADDRESS, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_CONTEXT_MESSAGE, TEST_IDENTITY_PROVIDER, TEST_PROVIDER_HASH, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+ 
+@@ -48,7 +48,7 @@ const whitelist = Object.freeze(['api.example.com', 'xn--bcher-kva.example'])
+ 
+ function client(hosts: readonly string[] = whitelist) {
+ 	return {
+-		tunnels: {}, isOpen: true, authHostWhitelist: hosts, authIdentity: TEST_SESSION_ID,
++		tunnels: {}, isOpen: true, authHostWhitelist: hosts, authIdentity: testAuthIdentity(),
+ 		assertAuthActive() {}, async sendMessage() {},
+ 		metadata: { signatureType: ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH },
+ 		getTunnel() {
+@@ -242,14 +242,16 @@ it('accepts the hook-supported canonical bid context with one raw target each',
+ 	const message = `bid:10143:${TEST_AUCTION_ADDRESS}:1:100:nonce`
+ 	const input = JSON.stringify({
+ 		contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: message,
++		identityProvider: TEST_IDENTITY_PROVIDER,
+ 		reclaimSessionId: TEST_SESSION_ID
+ 	})
+ 	const signed = JSON.stringify({
+ 		contextAddress: TEST_CONTEXT_ADDRESS, contextMessage: message,
+ 		extractedParameters: { account: 'synthetic-commitment' },
++		identityProvider: TEST_IDENTITY_PROVIDER,
+ 		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
+ 	})
+-	assertSupportedSignedContext(signed, assertSupportedInputContext(input, TEST_SESSION_ID, TEST_CHAIN_IDS))
++	assertSupportedSignedContext(signed, assertSupportedInputContext(input, testAuthIdentity(message), TEST_CHAIN_IDS))
+ })
+ 
+ it('rejects TEE before verification, either signature, or a useful response', async() => {
+diff --git a/src/tests/http-charset-evidence-security.test.ts b/src/tests/http-charset-evidence-security.test.ts
+deleted file mode 100644
+index 201e47f..0000000
+--- a/src/tests/http-charset-evidence-security.test.ts
++++ /dev/null
+@@ -1,193 +0,0 @@
+-import assert from 'node:assert/strict'
+-import { readFileSync } from 'node:fs'
+-import { it } from 'node:test'
+-
+-import { CURRENT_ATTESTOR_VERSION, PROVIDER_CTX } from '#src/config/index.ts'
+-import { AttestorVersion } from '#src/proto/api.ts'
+-import { KOutputPayload, SignedMessage, TOutputPayload } from '#src/proto/tee-bundle.ts'
+-import httpProvider from '#src/providers/http/index.ts'
+-import { charsetFromAuthenticatedPrefix, reconstructTlsTranscript } from '#src/server/utils/tee-transcript-reconstruction.ts'
+-import type { ProviderParams, Transcript } from '#src/types/index.ts'
+-import { logger, redactSlices } from '#src/utils/index.ts'
+-
+-const name = 'Привет'
+-const wrongName = new TextDecoder('windows-1251').decode(Buffer.from(name))
+-function response(body: Uint8Array) {
+-	return Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\n\r\n`), body])
+-}
+-function verify(bytes: Uint8Array, value: string, redactions?: { start: number, length: number }[], replacements?: { position: number, length: number }[], verifiedCharset?: string) {
+-	const receipt: Transcript<Uint8Array> = [
+-		{ sender: 'client', message: Buffer.from('GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n') },
+-		{ sender: 'server', message: bytes },
+-	]
+-	const params: ProviderParams<'http'> = { url: 'https://example.com/', method: 'GET', responseMatches: [{ type: 'contains', value }] }
+-	return httpProvider.assertValidProviderReceipt({ receipt, params, logger, ctx: { ...PROVIDER_CTX, authenticatedResponseCharset: verifiedCharset ?? (redactions ? charsetFromAuthenticatedPrefix(bytes, redactions, replacements) : undefined) }, clientVersion: CURRENT_ATTESTOR_VERSION })
+-}
+-
+-it('does not let a hidden UTF-8 BOM select a different document charset', async() => {
+-	const body = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`<meta charset=windows-1251><p>${name}</p>`)])
+-	await verify(response(body), name)
+-	body.fill(42, 0, 3)
+-	await assert.rejects(async() => verify(response(body), wrongName, [{ start: response(body).length - body.length, length: 3 }]))
+-})
+-
+-it('does not promote a commented declaration when comment delimiters are hidden', async() => {
+-	const body = Buffer.from(`<!--<meta charset=windows-1251>--><p>${name}</p>`)
+-	await verify(response(body), name)
+-	body.fill(42, 0, 4)
+-	const close = body.indexOf('-->')
+-	body.fill(42, close, close + 3)
+-	await assert.rejects(async() => verify(response(body), wrongName, [{ start: response(body).length - body.length, length: 4 }, { start: response(body).length - body.length + close, length: 3 }]))
+-})
+-
+-it('accepts script JSON receipts generated by the TypeScript redactor', async() => {
+-	const raw = response(Buffer.from(`<script>{"fake":"<meta charset=windows-1251>","name":"${name}"}</script>`))
+-	const params: ProviderParams<'http'> = {
+-		url: 'https://example.com/', method: 'GET', responseMatches: [{ type: 'contains', value: name }], responseRedactions: [{ xPath: '//script/text()' }],
+-	}
+-	const ranges = httpProvider.getResponseRedactions!({ response: raw, params, logger, ctx: PROVIDER_CTX })
+-	await verify(redactSlices(raw, ranges), name)
+-})
+-
+-
+-it('uses an authenticated public declaration before a private suffix', async() => {
+-	const body = Buffer.concat([Buffer.from('<meta charset=windows-1251><p>'), Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]), Buffer.from('</p>PRIVATE')])
+-	const bytes = response(body)
+-	const start = bytes.length - 7
+-	bytes.fill(42, start)
+-	const ranges = [{ start, length: 7 }]
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, ranges), 'windows-1251')
+-	await verify(bytes, name, ranges)
+-})
+-
+-it('does not trust a hash-replaced prefix even without asterisks', () => {
+-	const bytes = response(Buffer.from('hashvalue<meta charset=windows-1251>'))
+-	const start = bytes.indexOf('hashvalue')
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, [], [{ position: start, length: 9 }]), undefined)
+-})
+-
+-it('requires complete public headers before trusting document declarations', () => {
+-	const bytes = response(Buffer.from('<meta charset=windows-1251>'))
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, [{ start: 18, length: 1 }]), undefined)
+-})
+-
+-it('does not use XML fallback while a later meta may be hidden', () => {
+-	const bytes = response(Buffer.from('<?xml encoding="windows-1251"?><meta charset=windows-1252>'))
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, [{ start: bytes.indexOf('<meta'), length: 1 }]), undefined)
+-})
+-
+-it('allows literal asterisks in authenticated public bytes', () => {
+-	const bytes = response(Buffer.from('<!--***--><meta charset=windows-1251>PRIVATE'))
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, [{ start: bytes.length - 7, length: 7 }]), 'windows-1251')
+-})
+-
+-it('maps a public prefix across chunk framing', async() => {
+-	const first = Buffer.from('<meta charset=windows-1251>')
+-	const second = Buffer.concat([Buffer.from('<p>'), Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]), Buffer.from('</p>PRIVATE')])
+-	const bytes = Buffer.concat([Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n'), Buffer.from(first.length.toString(16) + '\r\n'), first, Buffer.from('\r\n' + second.length.toString(16) + '\r\n'), second, Buffer.from('\r\n0\r\n\r\n')])
+-	const start = bytes.indexOf('PRIVATE')
+-	const ranges = [{ start, length: 7 }]
+-	bytes.fill(42, start, start + 7)
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, ranges), 'windows-1251')
+-	await verify(bytes, name, ranges)
+-})
+-
+-
+-it('derives TEE charset before reconstruction transformations using signed ranges', async() => {
+-	const bytes = response(Buffer.from('<meta charset=windows-1251>PRIVATE'))
+-	const start = bytes.length - 7
+-	const kOutputPayload = KOutputPayload.create({ redactedRequest: Buffer.from('GET / HTTP/1.1\r\n\r\n'), consolidatedResponseKeystream: new Uint8Array(bytes.length), responseRedactionRanges: [{ start, length: 7 }] })
+-	const bundle = { teekSigned: SignedMessage.create({}), teetSigned: SignedMessage.create({}), kOutputPayload, tOutputPayload: TOutputPayload.create({ consolidatedResponseCiphertext: bytes }), teekPcr0: 'test-k', teetPcr0: 'test-t', teeSessionId: 'test', protocolMode: 'split-aead' as const }
+-	const publicPrefix = await reconstructTlsTranscript(bundle, logger)
+-	assert.equal(publicPrefix.authenticatedResponseCharset, 'windows-1251')
+-	assert.equal(Buffer.from(publicPrefix.reconstructedResponse).includes('PRIVATE'), false)
+-	kOutputPayload.responseRedactionRanges.push({ start: bytes.indexOf('<meta'), length: 1 })
+-	const hiddenPrefix = await reconstructTlsTranscript(bundle, logger)
+-	assert.equal(hiddenPrefix.authenticatedResponseCharset, undefined)
+-})
+-
+-
+-for(const transferHeader of ['Transfer-Encoding: chunked', 'Transfer-Encoding: Chunked', 'Transfer-Encoding:chunked', 'tRaNsFeR-EnCoDiNg:\tChUnKeD']) {
+-	for(const mode of ['split-aead', 'tls12-cbc'] as const) {
+-		it(`preserves BOM precedence through ${transferHeader} (${mode})`, async() => {
+-			const body = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`<meta charset=windows-1251><p>${name}</p>`)])
+-			// Split inside the BOM to exercise raw-to-dechunked coordinates.
+-			const parts = [body.subarray(0, 1), body.subarray(1, 2), body.subarray(2)]
+-			const bytes = Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n${transferHeader}\r\n\r\n`), ...parts.flatMap(part => [Buffer.from(part.length.toString(16) + '\r\n'), part, Buffer.from('\r\n')]), Buffer.from('0\r\n\r\n')])
+-			const kOutputPayload = KOutputPayload.create({ redactedRequest: Buffer.from('GET / HTTP/1.1\r\n\r\n'), consolidatedResponseKeystream: new Uint8Array(bytes.length), tls12Cbc: mode === 'tls12-cbc' ? { authenticatedRedactedRequest: Buffer.from('GET / HTTP/1.1\r\n\r\n') } : undefined })
+-			const tOutputPayload = TOutputPayload.create({ consolidatedResponseCiphertext: bytes, tls12Cbc: mode === 'tls12-cbc' ? { authenticatedRedactedResponse: bytes } : undefined })
+-			const bundle = { teekSigned: SignedMessage.create({}), teetSigned: SignedMessage.create({}), kOutputPayload, tOutputPayload, teekPcr0: 'test-k', teetPcr0: 'test-t', teeSessionId: 'test', protocolMode: mode }
+-			const reconstructed = await reconstructTlsTranscript(bundle, logger)
+-			assert.equal(reconstructed.authenticatedResponseCharset, 'utf-8')
+-			await verify(reconstructed.reconstructedResponse, name, undefined, undefined, reconstructed.authenticatedResponseCharset)
+-			await assert.rejects(async() => verify(reconstructed.reconstructedResponse, wrongName, undefined, undefined, reconstructed.authenticatedResponseCharset))
+-			const bodyStart = bytes.indexOf('\r\n\r\n') + 4
+-			const firstDataByte = bodyStart + 3
+-			assert.equal(charsetFromAuthenticatedPrefix(bytes, [{ start: firstDataByte, length: 1 }]), undefined)
+-		})
+-	}
+-}
+-
+-
+-// Generated with reclaim-tee GetResponseRedactions at 4dc36db, using
+-// <html><head><meta charset=windows-1251></head><body><span>Привет</span></body></html>
+-// and XPath //span/text(). These are known coverage limits, not successful claims.
+-const goReceipts: { cbc: boolean, response: string, redactions: { start: number, length: number }[], match: string }[] = JSON.parse(readFileSync(new URL('./fixtures/go-charset-prefix-limits.json', import.meta.url), 'utf8'))
+-for(const fixture of goReceipts) {
+-	it(`documents actual Go receipt prefix limits (cbc=${fixture.cbc})`, async() => {
+-		const bytes = Buffer.from(fixture.response, 'base64')
+-		assert.equal(charsetFromAuthenticatedPrefix(bytes, fixture.redactions), undefined)
+-		await assert.rejects(async() => verify(bytes, fixture.match, fixture.redactions))
+-	})
+-}
+-
+-
+-it('does not treat parser-truncated hidden chunks as a fully public body', () => {
+-	const xml = Buffer.from('<?xml encoding="windows-1251"?>')
+-	const bytes = Buffer.concat([Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: Chunked\r\n\r\n'), Buffer.from(xml.length.toString(16) + '\r\n'), xml, Buffer.from('\r\n********************\r\n0\r\n\r\n')])
+-	const start = bytes.indexOf('********************')
+-	assert.equal(charsetFromAuthenticatedPrefix(bytes, [{ start, length: 20 }]), undefined)
+-})
+-
+-
+-for(const header of [
+-	'X-Test: transfer-encoding: chunked',
+-	'Transfer-Encoding: chunkedgarbage',
+-	'Transfer-Encoding: gzip, chunked',
+-	'Transfer-Encoding: chunked\r\nContent-Length: 0',
+-	'Transfer-Encoding: chunked\r\nTransfer-Encoding: identity',
+-	'Transfer-Encoding: chunked\r\nContent-Encoding: gzip',
+-]) {
+-	it(`does not authorize a charset under ambiguous framing: ${header}`, () => {
+-		const body = Buffer.from('<meta charset=windows-1251>')
+-		const bytes = Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n${header}\r\n\r\n${body.length.toString(16)}\r\n`), body, Buffer.from('\r\n0\r\n\r\n')])
+-		assert.equal(charsetFromAuthenticatedPrefix(bytes, []), undefined)
+-	})
+-}
+-
+-it('does not authorize a charset from unequal AEAD shares', async() => {
+-	const prefix = Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<?xml encoding="windows-1251"?><p>public</p>')
+-	const bytes = Buffer.concat([prefix, Buffer.from('<meta charset=utf-8>')])
+-	const bundle = { teekSigned: SignedMessage.create({}), teetSigned: SignedMessage.create({}), kOutputPayload: KOutputPayload.create({ redactedRequest: Buffer.from('GET / HTTP/1.1\r\n\r\n'), consolidatedResponseKeystream: new Uint8Array(prefix.length) }), tOutputPayload: TOutputPayload.create({ consolidatedResponseCiphertext: bytes }), teekPcr0: 'test-k', teetPcr0: 'test-t', teeSessionId: 'test', protocolMode: 'split-aead' as const }
+-	const result = await reconstructTlsTranscript(bundle, logger)
+-	assert.equal(result.authenticatedResponseCharset, undefined)
+-})
+-
+-for(const label of ['&#160;windows-1251&#160;', '&nbsp;windows-1251&nbsp;', '\vwindows-1251\v', '&nbsp;x-user-defined&nbsp;']) {
+-	it(`does not accept non-ASCII label whitespace: ${label}`, () => {
+-		assert.equal(charsetFromAuthenticatedPrefix(response(Buffer.from(`<meta charset="${label}"><p>${name}</p>`)), []), 'utf-8')
+-	})
+-}
+-
+-
+-it('does not apply a document charset to legacy status-relative body offsets', async() => {
+-	const bytes = response(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('<p>Привет</p>', 'utf16le')]))
+-	const charset = charsetFromAuthenticatedPrefix(bytes, [])
+-	assert.equal(charset, 'utf-16le')
+-	const wrongText = new TextDecoder(charset).decode(bytes.subarray('HTTP/1.1 200'.length))
+-	const receipt: Transcript<Uint8Array> = [{ sender: 'client', message: Buffer.from('GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n') }, { sender: 'server', message: bytes }]
+-	for(const version of [AttestorVersion.ATTESTOR_VERSION_1_0_0, AttestorVersion.ATTESTOR_VERSION_2_0_0]) {
+-		const params: ProviderParams<'http'> = { url: 'https://example.com/', method: 'GET', responseMatches: [{ type: 'contains', value: wrongText }] }
+-		await assert.rejects(async() => httpProvider.assertValidProviderReceipt({ receipt, params, logger, ctx: { version, authenticatedResponseCharset: charset }, clientVersion: version }))
+-	}
+-})
+diff --git a/src/tests/log-privacy.test.ts b/src/tests/log-privacy.test.ts
+index 0484a33..5bc4631 100644
+--- a/src/tests/log-privacy.test.ts
++++ b/src/tests/log-privacy.test.ts
+@@ -4,7 +4,7 @@ import { Writable } from 'node:stream'
+ import { setTimeout as delay } from 'node:timers/promises'
+ import { it, mock } from 'node:test'
+ import { Wallet } from 'ethers'
+-import { inputContext, signedContext, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { inputContext, signedContext, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ import { canonicalStringify } from '#src/utils/claims.ts'
+ 
+ process.env.CLAIM_EPOCH = '2'
+@@ -123,7 +123,7 @@ for(const level of ['info', 'debug'] as const) {
+ 			const request = proto.ClaimTunnelRequest.create({ request: { id: 1, host: 'example.com', port: 443 }, data: { timestampS: claimInfo.timestampS, context: inputContext() } })
+ 			const handlerLogger = logger.child({ connectionRef: loggerModule.createServerLogRef(randomUUID), operationRef: loggerModule.createServerLogRef(randomUUID), handler: 'claimTunnel', userId: canaries.auth, requestId: canaries.requestId })
+ 			const handlerClient = {
+-				authIdentity: TEST_SESSION_ID,
++				authIdentity: testAuthIdentity(),
+ 				authHostWhitelist: Object.freeze(['example.com']),
+ 				metadata: { signatureType: proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
+ 				assertAuthActive() {},
+diff --git a/src/tests/sandbox-context.test.ts b/src/tests/sandbox-context.test.ts
+index 5fdb233..58b89d2 100644
+--- a/src/tests/sandbox-context.test.ts
++++ b/src/tests/sandbox-context.test.ts
+@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
+ import { it } from 'node:test'
+ 
+ import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
+-import { TEST_CHAIN_IDS, TEST_PROVIDER_HASH, TEST_SESSION_ID } from '#src/tests/utils/claim-context.ts'
++import { TEST_CHAIN_IDS, TEST_IDENTITY_PROVIDER, TEST_PROVIDER_HASH, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
+ 
+ // Byte-equal to @umia/types proof-context.sandbox-vectors.json; a repo test enforces it.
+ const vectors = JSON.parse(
+@@ -11,19 +11,19 @@ const vectors = JSON.parse(
+ ) as { chainId: number, contextAddress: string, accepted: string[], rejected: string[] }
+ 
+ function input(contextMessage: string, contextAddress = vectors.contextAddress) {
+-	return JSON.stringify({ contextAddress, contextMessage, reclaimSessionId: TEST_SESSION_ID })
++	return JSON.stringify({ contextAddress, contextMessage, identityProvider: TEST_IDENTITY_PROVIDER, reclaimSessionId: TEST_SESSION_ID })
+ }
+ 
+ it('admits exactly the shared sandbox context vectors as sandbox messages', () => {
+ 	assert.equal(vectors.chainId, 10143)
+ 	for(const message of vectors.accepted) {
+-		assert.equal(assertSupportedInputContext(input(message), TEST_SESSION_ID, TEST_CHAIN_IDS).contextMessage, message)
++		assert.equal(assertSupportedInputContext(input(message), testAuthIdentity(message, vectors.contextAddress), TEST_CHAIN_IDS).contextMessage, message)
+ 	}
+ 	// A rejected vector may still be a valid auction message; it must never pass as a sandbox one.
+ 	for(const message of vectors.rejected) {
+ 		let admitted = true
+ 		try {
+-			assertSupportedInputContext(input(message), TEST_SESSION_ID, TEST_CHAIN_IDS)
++			assertSupportedInputContext(input(message), testAuthIdentity(message, vectors.contextAddress), TEST_CHAIN_IDS)
+ 		} catch {
+ 			admitted = false
+ 		}
+@@ -33,10 +33,11 @@ it('admits exactly the shared sandbox context vectors as sandbox messages', () =
+ 
+ it('admits a sandbox context bound to its wallet and session through both checks', () => {
+ 	const message = vectors.accepted[0]
+-	const accepted = assertSupportedInputContext(input(message), TEST_SESSION_ID, TEST_CHAIN_IDS)
++	const accepted = assertSupportedInputContext(input(message), testAuthIdentity(message, vectors.contextAddress), TEST_CHAIN_IDS)
+ 	assertSupportedSignedContext(JSON.stringify({
+ 		contextAddress: vectors.contextAddress, contextMessage: message,
+ 		extractedParameters: { handle: 'synthetic' },
++		identityProvider: TEST_IDENTITY_PROVIDER,
+ 		providerHash: TEST_PROVIDER_HASH, reclaimSessionId: TEST_SESSION_ID
+ 	}), accepted)
+ })
+@@ -49,6 +50,25 @@ it('rejects a sandbox context for another wallet, another session, or free text'
+ 		[input('Auction verification'), TEST_SESSION_ID],
+ 		[input('test-only sandbox run:alpha'), TEST_SESSION_ID],
+ 	]) {
+-		assert.throws(() => assertSupportedInputContext(raw, session, TEST_CHAIN_IDS), /Unsupported claim context/)
++		assert.throws(() => assertSupportedInputContext(raw, testAuthIdentity(vectors.accepted[0], vectors.contextAddress, session), TEST_CHAIN_IDS), /Unsupported claim context/)
+ 	}
+ })
++
++it('refuses modified namespace, wallet, challenge, provider hash, and replayed session', () => {
++	const message = vectors.accepted[0]
++	const binding = testAuthIdentity(message, vectors.contextAddress)
++	const valid = JSON.parse(input(message))
++	for(const changed of [
++		{ identityProvider: 'other' },
++		{ contextAddress: '0x00000000000000000000000000000000000000a2' },
++		{ contextMessage: vectors.accepted[1] },
++		{ reclaimSessionId: 'replayed-session' }
++	]) {
++		assert.throws(() => assertSupportedInputContext(JSON.stringify({ ...valid, ...changed }), binding, TEST_CHAIN_IDS))
++	}
++	const accepted = assertSupportedInputContext(input(message), binding, TEST_CHAIN_IDS)
++	const claim = {
++		...valid, extractedParameters: { account: 'stable' }, providerHash: TEST_PROVIDER_HASH
++	}
++	assert.throws(() => assertSupportedSignedContext(JSON.stringify({ ...claim, providerHash: `0x${'b'.repeat(64)}` }), accepted))
++})
+diff --git a/src/tests/sec-hardening.test.ts b/src/tests/sec-hardening.test.ts
+new file mode 100644
+index 0000000..72afa88
+--- /dev/null
++++ b/src/tests/sec-hardening.test.ts
+@@ -0,0 +1,339 @@
++import assert from 'node:assert/strict'
++import { spawnSync } from 'node:child_process'
++import { createPrivateKey, webcrypto } from 'node:crypto'
++import { readFileSync } from 'node:fs'
++import { connect, createServer as createNetServer } from 'node:net'
++import type { AddressInfo } from 'node:net'
++import { after, describe, it } from 'node:test'
++import { connect as tlsConnect, createServer as createTlsServer } from 'node:tls'
++import * as x509 from '@peculiar/x509'
++import { Wallet } from 'ethers'
++import { WebSocket } from 'ws'
++
++import { RPCMessages, TranscriptMessageSenderType } from '#src/proto/api.ts'
++import { SEC_HARDENING_REASONS } from '#src/tests/utils/sec-hardening-reasons.ts'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.CLAIM_CHAIN_IDS = '10143'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++process.env.DISABLE_BGP_CHECKS = '1'
++
++const [
++	{ REJECTION_REASONS, rejectionReason },
++	{ AttestorError },
++	{ processHandshake },
++	{ fetchCertificateBytes },
++	{ toprf },
++	{ assertValidAuthRequest, createAuthRequest },
++	{ AttestorClient },
++	{ INIT_TIMEOUT_MS, MAX_AUTHENTICATED_WS_PAYLOAD_BYTES, MAX_PRE_AUTH_WS_PAYLOAD_BYTES, MAX_SOCKETS_PER_AUTH, WS_PATHNAME },
++	{ createServer },
++	{ getRandomPort },
++	{ SelectedServiceSignatureType },
++] = await Promise.all([
++	import('#src/utils/rejection-reason.ts'),
++	import('#src/utils/error.ts'),
++	import('#src/server/utils/process-handshake.ts'),
++	import('#src/server/handlers/fetchCertificateBytes.ts'),
++	import('#src/server/handlers/toprf.ts'),
++	import('#src/utils/auth.ts'),
++	import('#src/client/utils/client-socket.ts'),
++	import('#src/config/index.ts'),
++	import('#src/server/create-server.ts'),
++	import('#src/tests/utils.ts'),
++	import('#src/utils/signatures/index.ts'),
++])
++
++const logger = { info() {}, debug() {}, warn() {}, error() {}, trace() {}, child() { return logger } } as any
++const AIA_HOST = 'aia.example'
++const exercised = new Set<string>()
++
++after(() => {
++	assert.deepEqual([...exercised].sort(), [...SEC_HARDENING_REASONS].sort())
++	for(const reason of SEC_HARDENING_REASONS) assert.ok(Object.hasOwn(REJECTION_REASONS, reason), reason)
++})
++
++function within<T>(promise: Promise<T>, ms: number) {
++	let timer: ReturnType<typeof setTimeout>
++	const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no outcome within ${ms} ms`)), ms) })
++	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
++}
++
++function assertReason(err: unknown, code: string, reason: string) {
++	assert.ok(err instanceof AttestorError, String(err))
++	assert.equal(err.code, code)
++	assert.equal(rejectionReason(err), reason)
++	exercised.add(reason)
++	return true
++}
++
++/** A leaf whose issuer is reachable only through its AIA caIssuers URL. */
++async function leafWithAiaOnlyIssuer() {
++	x509.cryptoProvider.set(webcrypto as any)
++	const alg = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' }
++	const issuerKeys = await webcrypto.subtle.generateKey(alg, true, ['sign', 'verify'])
++	const leafKeys = await webcrypto.subtle.generateKey(alg, true, ['sign', 'verify'])
++	const notBefore = new Date(Date.now() - 60_000)
++	const notAfter = new Date(Date.now() + 3_600_000)
++	const leaf = await x509.X509CertificateGenerator.create({
++		serialNumber: '02',
++		subject: `CN=${AIA_HOST}`,
++		issuer: 'CN=Synthetic Issuer',
++		notBefore,
++		notAfter,
++		signingAlgorithm: alg,
++		publicKey: leafKeys.publicKey,
++		signingKey: issuerKeys.privateKey,
++		extensions: [
++			new x509.SubjectAlternativeNameExtension([{ type: 'dns', value: AIA_HOST }]),
++			new x509.AuthorityInfoAccessExtension({ caIssuers: 'http://127.0.0.1:9/issuer.crt' })
++		]
++	})
++	const pkcs8 = Buffer.from(await webcrypto.subtle.exportKey('pkcs8', leafKeys.privateKey))
++	return { cert: leaf.toString('pem'), key: createPrivateKey({ key: pkcs8, format: 'der', type: 'pkcs8' }).export({ format: 'pem', type: 'pkcs8' }) }
++}
++
++/** Records a real TLS 1.2 handshake up to the server's plaintext Certificate message. */
++async function recordTls12Handshake() {
++	const { cert, key } = await leafWithAiaOnlyIssuer()
++	const server = createTlsServer({ cert, key, maxVersion: 'TLSv1.2', ciphers: 'ECDHE-ECDSA-AES128-GCM-SHA256' })
++	server.on('tlsClientError', () => {})
++	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
++	const records: { sender: TranscriptMessageSenderType, message: Uint8Array }[] = []
++	const relay = createNetServer(client => {
++		const upstream = connect((server.address() as AddressInfo).port, '127.0.0.1')
++		const split = (sender: TranscriptMessageSenderType) => {
++			let pending = Buffer.alloc(0)
++			return (chunk: Buffer) => {
++				pending = Buffer.concat([pending, chunk])
++				while(pending.length >= 5 && pending.length >= 5 + pending.readUInt16BE(3)) {
++					const length = 5 + pending.readUInt16BE(3)
++					records.push({ sender, message: new Uint8Array(pending.subarray(0, length)) })
++					pending = pending.subarray(length)
++				}
++			}
++		}
++		const fromClient = split(TranscriptMessageSenderType.TRANSCRIPT_MESSAGE_SENDER_TYPE_CLIENT)
++		const fromServer = split(TranscriptMessageSenderType.TRANSCRIPT_MESSAGE_SENDER_TYPE_SERVER)
++		client.on('data', chunk => { fromClient(chunk); upstream.write(chunk) })
++		upstream.on('data', chunk => { fromServer(chunk); client.write(chunk) })
++		client.on('error', () => upstream.destroy())
++		upstream.on('error', () => client.destroy())
++	})
++	await new Promise<void>(resolve => relay.listen(0, '127.0.0.1', resolve))
++	await new Promise<void>(resolve => {
++		const socket = tlsConnect({
++			port: (relay.address() as AddressInfo).port,
++			host: '127.0.0.1',
++			servername: AIA_HOST,
++			rejectUnauthorized: false,
++			maxVersion: 'TLSv1.2'
++		}, () => { socket.end(); resolve() })
++		socket.on('error', () => resolve())
++	})
++	relay.close()
++	server.close()
++	return records
++}
++
++describe('certificate fetching', () => {
++	it('refuses the fetchCertificateBytes RPC without a request', async(t) => {
++		const fetchSpy = t.mock.method(globalThis, 'fetch', async() => new Response('', { status: 404 }))
++		await assert.rejects(
++			fetchCertificateBytes({ url: 'http://169.254.169.254/latest/meta-data/' }, {} as any),
++			(err: unknown) => assertReason(err, 'ERROR_CERTIFICATE_FETCH_FAILED', 'CERTIFICATE_FETCH_DISABLED')
++		)
++		assert.equal(fetchSpy.mock.callCount(), 0)
++	})
++
++	it('refuses the AIA issuer fetch while verifying a claimed handshake', async(t) => {
++		const transcript = await recordTls12Handshake()
++		const fetchSpy = t.mock.method(globalThis, 'fetch', async() => new Response('', { status: 404 }))
++		const cachedBefore = Object.keys(TLS_INTERMEDIATE_CA_CACHE)
++		await assert.rejects(
++			processHandshake(transcript as any, logger),
++			(err: unknown) => assertReason(err, 'ERROR_CERTIFICATE_FETCH_FAILED', 'CERTIFICATE_FETCH_DISABLED')
++		)
++		assert.equal(fetchSpy.mock.callCount(), 0)
++		assert.deepEqual(Object.keys(TLS_INTERMEDIATE_CA_CACHE), cachedBefore)
++	})
++})
++
++describe('toprf', () => {
++	it('refuses OPRF evaluation on client input', async() => {
++		await assert.rejects(
++			toprf({ maskedData: new Uint8Array(32), engine: 0 } as any, { logger } as any),
++			(err: unknown) => assertReason(err, 'ERROR_BAD_REQUEST', 'TOPRF_DISABLED')
++		)
++	})
++})
++
++describe('auth lifetime', () => {
++	it('admits at most 15 minutes after createdAt and createdAt at most 60 s ahead', async(t) => {
++		const issuer = Wallet.createRandom()
++		process.env.AUTHENTICATION_PUBLIC_KEY = issuer.publicKey
++		const now = 1_800_000_000
++		t.mock.method(Date, 'now', () => now * 1000)
++		const auth = (createdAt: number, expiresAt: number, key = issuer.privateKey) => (
++			createAuthRequest({ id: 'session', hostWhitelist: ['example.com'], createdAt, expiresAt }, key)
++		)
++		try {
++			for(const [createdAt, expiresAt] of [[now, now + 900], [now + 60, now + 960], [now - 899, now + 1]]) {
++				await assertValidAuthRequest(await auth(createdAt, expiresAt), SelectedServiceSignatureType)
++			}
++			for(const [createdAt, expiresAt] of [[now, now + 901], [now + 61, now + 120], [0, now + 60], [now + 30, now + 30], [now + 30, now + 20]]) {
++				await assert.rejects(
++					assertValidAuthRequest(await auth(createdAt, expiresAt), SelectedServiceSignatureType),
++					(err: unknown) => assertReason(err, 'ERROR_AUTHENTICATION_FAILED', 'AUTH_LIFETIME_INVALID'),
++					`${createdAt}..${expiresAt}`
++				)
++			}
++			// The signature is checked first, so a forged long-lived auth reports AUTH_INVALID.
++			await assert.rejects(
++				assertValidAuthRequest(await auth(0, now + 60, Wallet.createRandom().privateKey), SelectedServiceSignatureType),
++				(err: unknown) => rejectionReason(err) === 'AUTH_INVALID'
++			)
++		} finally {
++			delete process.env.AUTHENTICATION_PUBLIC_KEY
++		}
++	})
++})
++
++describe('pre-init socket limits', () => {
++	const issuer = Wallet.createRandom()
++	const authRequest = (id = 'session') => createAuthRequest({ id, hostWhitelist: ['example.com'] }, issuer.privateKey)
++	const tunnelMessage = (bytes: number) => RPCMessages.encode({
++		messages: [{ id: 1, tunnelMessage: { tunnelId: 9, message: new Uint8Array(bytes) } }]
++	}).finish()
++	const closeCode = (client: InstanceType<typeof AttestorClient>) => new Promise<number>(resolve => (
++		(client as any).socket.addEventListener('close', (event: { code: number }) => resolve(event.code))
++	))
++
++	async function withServer(test: (url: string) => Promise<void>) {
++		process.env.AUTHENTICATION_PUBLIC_KEY = issuer.publicKey
++		const port = getRandomPort()
++		const server = await createServer(port)
++		try {
++			await test(`ws://127.0.0.1:${port}${WS_PATHNAME}`)
++		} finally {
++			server.close()
++			delete process.env.AUTHENTICATION_PUBLIC_KEY
++		}
++	}
++
++	it('terminates a socket that does not init in time and keeps an initialised one', () => withServer(async url => {
++		const authed = new AttestorClient({ url, authRequest: await authRequest() })
++		const idle = new WebSocket(url)
++		try {
++			await authed.waitForInit()
++			const openedAt = Date.now()
++			const alert = new Promise<unknown>((resolve, reject) => {
++				idle.on('message', (data: Buffer) => {
++					const msg = RPCMessages.decode(data).messages.find(m => m.connectionTerminationAlert)
++					if(msg) resolve(AttestorError.fromProto(msg.connectionTerminationAlert!))
++				})
++				idle.on('close', () => reject(new Error('closed without an alert')))
++			})
++			const closed = new Promise<void>(resolve => idle.on('close', () => resolve()))
++			assertReason(await within(alert, 2 * INIT_TIMEOUT_MS), 'ERROR_TIMEOUT', 'INIT_TIMEOUT')
++			await within(closed, 1_000)
++			assert.ok(Date.now() - openedAt >= INIT_TIMEOUT_MS - 50)
++			assert.equal(authed.isOpen, true)
++		} finally {
++			idle.terminate()
++			await authed.terminateConnection()
++		}
++	}))
++
++	it('caps messages before a verified auth and admits claim-sized ones after it', () => withServer(async url => {
++		const oversized = tunnelMessage(MAX_PRE_AUTH_WS_PAYLOAD_BYTES)
++		const preAuth = new WebSocket(url)
++		const authed = new AttestorClient({ url, authRequest: await authRequest(), makeWebSocket: target => new WebSocket(target) })
++		try {
++			await within(new Promise(resolve => preAuth.on('open', resolve)), 2_000)
++			assert.equal(preAuth.extensions, '')
++			const code = new Promise<number>(resolve => preAuth.on('close', resolve))
++			preAuth.send(oversized)
++			assert.equal(await within(code, 2_000), 1009)
++
++			await authed.waitForInit()
++			const authedSocket = (authed as any).socket as WebSocket
++			assert.equal(authedSocket.extensions, '')
++			await new Promise<void>((resolve, reject) => authedSocket.send(oversized, err => err ? reject(err) : resolve()))
++			await new Promise(resolve => setTimeout(resolve, 250))
++			assert.equal(authed.isOpen, true)
++
++			// A reveal too large for the authenticated cap fails finitely; the server keeps serving.
++			const closed = closeCode(authed)
++			await (authed as any).socket.send(tunnelMessage(MAX_AUTHENTICATED_WS_PAYLOAD_BYTES))
++			assert.equal(await within(closed, 5_000), 1009)
++			const next = new AttestorClient({ url, authRequest: await authRequest() })
++			await next.waitForInit()
++			await next.terminateConnection()
++		} finally {
++			preAuth.terminate()
++			await authed.terminateConnection()
++		}
++	}))
++
++	it('caps concurrent sockets per auth ID and frees a slot on close', () => withServer(async url => {
++		const auth = await authRequest()
++		const clients = Array.from({ length: MAX_SOCKETS_PER_AUTH }, () => new AttestorClient({ url, authRequest: auth }))
++		const other = new AttestorClient({ url, authRequest: await authRequest('other-session') })
++		let extra: InstanceType<typeof AttestorClient> | undefined
++		try {
++			await Promise.all([...clients, other].map(client => client.waitForInit()))
++			extra = new AttestorClient({ url, authRequest: auth })
++			await assert.rejects(extra.waitForInit(), (err: unknown) => assertReason(err, 'ERROR_AUTHENTICATION_FAILED', 'AUTH_SOCKET_LIMIT'))
++			const closed = closeCode(clients[0])
++			await clients[0].terminateConnection()
++			await within(closed, 2_000)
++			await new Promise(resolve => setTimeout(resolve, 50))
++			extra = new AttestorClient({ url, authRequest: auth })
++			await extra.waitForInit()
++		} finally {
++			await Promise.all([...clients, other, extra].map(client => client?.terminateConnection()))
++		}
++	}))
++})
++
++describe('image entrypoint', () => {
++	const entrypoint = new URL('../../entrypoint.sh', import.meta.url).pathname
++	const KEY = `0x02${'a'.repeat(64)}`
++	const baseEnv = {
++		PATH: process.env.PATH,
++		PRIVATE_KEY: '0x01',
++		TOPRF_PUBLIC_KEY: '0x01',
++		TOPRF_SHARE_PUBLIC_KEY: '0x01',
++		TOPRF_SHARE_PRIVATE_KEY: '0x01',
++		AUTHENTICATION_PUBLIC_KEY: KEY
++	}
++	const run = (overrides: Record<string, string | undefined>) => {
++		const env = Object.fromEntries(Object.entries({ ...baseEnv, ...overrides }).filter(([, value]) => value !== undefined))
++		return spawnSync('sh', [entrypoint, 'true'], { env, encoding: 'utf8' })
++	}
++
++	it('starts only with a production environment and a whole-value key', () => {
++		for(const env of [{}, { NODE_ENV: 'production' }, { AUTHENTICATION_PUBLIC_KEY: `0x04${'B'.repeat(128)}` }]) {
++			assert.equal(run(env).status, 0, JSON.stringify(env))
++		}
++		for(const env of [
++			{ NODE_ENV: 'test' },
++			{ NODE_ENV: 'development' },
++			{ ALLOWED_DIRECT_HOSTS: 'localhost' },
++			{ ALLOWED_DIRECT_HOSTS: '' },
++			{ ACCEPT_CLAIM_PAYMENT_REQUESTS: '1' },
++			{ AUTHENTICATION_PUBLIC_KEY: `0x02${'a'.repeat(63)}\n` },
++			{ AUTHENTICATION_PUBLIC_KEY: `0x02${'a'.repeat(31)}\n${'a'.repeat(32)}` },
++			{ AUTHENTICATION_PUBLIC_KEY: `0x02${'g'.repeat(64)}` },
++			{ AUTHENTICATION_PUBLIC_KEY: undefined }
++		]) {
++			assert.notEqual(run(env).status, 0, JSON.stringify(env))
++		}
++	})
++
++	it('keeps upstream env files out of the image context', () => {
++		const ignored = readFileSync(new URL('../../.dockerignore', import.meta.url), 'utf8').split('\n')
++		assert.ok(ignored.includes('.env*'))
++	})
++})
+diff --git a/src/tests/tee-cbc-contract.test.ts b/src/tests/tee-cbc-contract.test.ts
+deleted file mode 100644
+index 503e571..0000000
+--- a/src/tests/tee-cbc-contract.test.ts
++++ /dev/null
+@@ -1,660 +0,0 @@
+-import assert from 'node:assert'
+-import { describe, it } from 'node:test'
+-
+-import bs58 from 'bs58'
+-import { Wallet } from 'ethers'
+-
+-import {
+-	BodyType,
+-	CertificateInfo,
+-	KOutputPayload,
+-	OPRFOutput,
+-	OPRFVerificationData,
+-	SignedMessage,
+-	TLS12CBCKOutput,
+-	TLS12CBCRecordMode,
+-	TLS12CBCSessionBinding,
+-	TLS12CBCTOutput,
+-	TOutputPayload,
+-	VerificationBundle,
+-} from '#src/proto/tee-bundle.ts'
+-import { validateTeeTranscriptContract } from '#src/server/utils/tee-cbc-contract.ts'
+-import { MAX_TEE_OPRF_MPC_OUTPUTS, verifyOprfMpcOutputs } from '#src/server/utils/tee-oprf-mpc-verification.ts'
+-import { reconstructTlsTranscript } from '#src/server/utils/tee-transcript-reconstruction.ts'
+-import { type TeeBundleData, verifyTeeBundle } from '#src/server/utils/tee-verification.ts'
+-import { logger } from '#src/utils/logger.ts'
+-import { ETH_SIGNATURE_PROVIDER } from '#src/utils/signatures/eth.ts'
+-
+-const encoder = new TextEncoder()
+-const decoder = new TextDecoder()
+-
+-describe('TEE TLS 1.2 CBC contract', () => {
+-	it('accepts a complete CBC contract and reconstructs signed redactions', async() => {
+-		const request = encoder.encode('GET / HTTP/1.1\r\nHost: example.com\r\nAuthorization: SECRET\r\n\r\n')
+-		const requestSecret = findBytes(request, encoder.encode('SECRET'))
+-		const response = encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nSECRET')
+-		const responseSecret = findBytes(response, encoder.encode('SECRET'))
+-		const { bundle, kPayload, tPayload } = makeCbcContract(request, response, requestSecret, responseSecret)
+-
+-		assert.equal(validateTeeTranscriptContract(bundle, kPayload, tPayload), 'tls12-cbc')
+-		const transcript = await reconstructTlsTranscript(
+-			makeBundleData(kPayload, tPayload, 'tls12-cbc'),
+-			logger,
+-		)
+-		assert.equal(
+-			decoder.decode(transcript.revealedRequest),
+-			'GET / HTTP/1.1\r\nHost: example.com\r\nAuthorization: ******\r\n\r\n',
+-		)
+-		assert.equal(
+-			decoder.decode(transcript.reconstructedResponse),
+-			'HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\n******',
+-		)
+-	})
+-
+-	it('accepts an encoded and signed standalone CBC bundle', async() => {
+-		const contract = makeCbcContract(
+-			encoder.encode('GET /signed HTTP/1.1\r\n\r\n'),
+-			encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK'),
+-			99,
+-			99,
+-		)
+-		const teekWallet = Wallet.createRandom()
+-		const teetWallet = Wallet.createRandom()
+-		const kBody = KOutputPayload.encode(contract.kPayload).finish()
+-		const tBody = TOutputPayload.encode(contract.tPayload).finish()
+-		contract.bundle.teekSigned = SignedMessage.create({
+-			bodyType: BodyType.BODY_TYPE_K_OUTPUT,
+-			body: kBody,
+-			ethAddress: encoder.encode(teekWallet.address),
+-			signature: await ETH_SIGNATURE_PROVIDER.sign(kBody, teekWallet.privateKey),
+-		})
+-		contract.bundle.teetSigned = SignedMessage.create({
+-			bodyType: BodyType.BODY_TYPE_T_OUTPUT,
+-			body: tBody,
+-			ethAddress: encoder.encode(teetWallet.address),
+-			signature: await ETH_SIGNATURE_PROVIDER.sign(tBody, teetWallet.privateKey),
+-		})
+-
+-		const previousStandalone = process.env.TEE_STANDALONE
+-		process.env.TEE_STANDALONE = 'true'
+-		try {
+-			const verified = await verifyTeeBundle(VerificationBundle.encode(contract.bundle).finish(), logger)
+-			assert.equal(verified.protocolMode, 'tls12-cbc')
+-			assert.equal(verified.teeSessionId, 'cbc-session')
+-		} finally {
+-			if(previousStandalone === undefined) {
+-				delete process.env.TEE_STANDALONE
+-			} else {
+-				process.env.TEE_STANDALONE = previousStandalone
+-			}
+-		}
+-	})
+-
+-	it('rejects a one-sided or mixed CBC contract', () => {
+-		const { bundle, kPayload, tPayload } = makeCbcContract(
+-			encoder.encode('request'),
+-			encoder.encode('response'),
+-			0,
+-			0,
+-		)
+-		tPayload.tls12Cbc = undefined
+-		assert.throws(
+-			() => validateTeeTranscriptContract(bundle, kPayload, tPayload),
+-			/CBC contract must be present in both TEE payloads/,
+-		)
+-
+-		const mixed = makeCbcContract(encoder.encode('request'), encoder.encode('response'), 0, 0)
+-		mixed.kPayload.consolidatedResponseKeystream = new Uint8Array([1])
+-		assert.throws(
+-			() => validateTeeTranscriptContract(mixed.bundle, mixed.kPayload, mixed.tPayload),
+-			/mixes legacy split-AEAD fields/,
+-		)
+-	})
+-
+-	it('rejects binding, digest, range, and record-length tampering', () => {
+-		const bindingMismatch = makeCbcContract(encoder.encode('request'), encoder.encode('response'), 0, 0)
+-		bindingMismatch.tPayload.tls12Cbc!.binding!.sessionBinding[0] ^= 1
+-		assert.throws(
+-			() => validateTeeTranscriptContract(bindingMismatch.bundle, bindingMismatch.kPayload, bindingMismatch.tPayload),
+-			/session binding mismatch/,
+-		)
+-
+-		const badDigest = makeCbcContract(encoder.encode('request'), encoder.encode('response'), 0, 0)
+-		badDigest.kPayload.tls12Cbc!.requestRecordsSha256 = new Uint8Array(31)
+-		assert.throws(
+-			() => validateTeeTranscriptContract(badDigest.bundle, badDigest.kPayload, badDigest.tPayload),
+-			/request record digest must be 32 bytes/,
+-		)
+-
+-		const badRange = makeCbcContract(encoder.encode('request'), encoder.encode('response'), 0, 0)
+-		badRange.tPayload.tls12Cbc!.responseRedactionRanges = [{ start: 7, length: 2 }]
+-		assert.throws(
+-			() => validateTeeTranscriptContract(badRange.bundle, badRange.kPayload, badRange.tPayload),
+-			/response redaction range 0 is out of bounds/,
+-		)
+-
+-		const badLengths = makeCbcContract(encoder.encode('request'), encoder.encode('response'), 0, 0)
+-		badLengths.tPayload.tls12Cbc!.plaintextRecordLengths = [7]
+-		assert.throws(
+-			() => validateTeeTranscriptContract(badLengths.bundle, badLengths.kPayload, badLengths.tPayload),
+-			/record lengths do not match/,
+-		)
+-	})
+-
+-	it('accepts all twelve supported AES-CBC cipher suites', () => {
+-		const suites = [
+-			0xc009, 0xc013, 0xc00a, 0xc014, 0xc023, 0xc027,
+-			0xc024, 0xc028, 0x002f, 0x0035, 0x003c, 0x003d,
+-		]
+-		for(const cipherSuite of suites) {
+-			const contract = makeCbcContract(
+-				encoder.encode('request'),
+-				encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK'),
+-				99,
+-				99,
+-			)
+-			contract.kPayload.tls12Cbc!.binding!.cipherSuite = cipherSuite
+-			contract.tPayload.tls12Cbc!.binding!.cipherSuite = cipherSuite
+-			assert.equal(
+-				validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload),
+-				'tls12-cbc',
+-			)
+-		}
+-	})
+-
+-	it('caps CBC requests at one TLS plaintext record', () => {
+-		const response = encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK')
+-		const maximum = makeCbcContract(new Uint8Array(16_384), response, 99_999, 99_999)
+-		assert.equal(validateTeeTranscriptContract(maximum.bundle, maximum.kPayload, maximum.tPayload), 'tls12-cbc')
+-
+-		const oversized = makeCbcContract(new Uint8Array(16_385), response, 99_999, 99_999)
+-		assert.throws(
+-			() => validateTeeTranscriptContract(oversized.bundle, oversized.kPayload, oversized.tPayload),
+-			/authenticated request length/,
+-		)
+-	})
+-
+-	it('requires complete CBC Content-Length and chunked responses', () => {
+-		const request = encoder.encode('request')
+-		const validResponses = [
+-			'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK',
+-			'HTTP/1.1 200 OK\r\nContent-Length: 02\r\n\r\nOK',
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nOK\r\n0\r\n\r\n',
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;hidden=VALUE\r\nOK\r\n0\r\nX-Trailer: value\r\n\r\n',
+-		]
+-		for(const response of validResponses) {
+-			const contract = makeCbcContract(request, encoder.encode(response), 99, 99)
+-			assert.equal(validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload), 'tls12-cbc')
+-		}
+-
+-		const responseWithHiddenMetadata = encoder.encode(
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;hidden=VALUE\r\nOK\r\n0\r\nX-Trailer: value\r\n\r\n',
+-		)
+-		const hiddenMetadata = makeCbcContract(request, responseWithHiddenMetadata, 99, 99)
+-		hiddenMetadata.tPayload.tls12Cbc!.responseRedactionRanges = [
+-			{ start: findBytes(responseWithHiddenMetadata, encoder.encode('hidden=VALUE')), length: 'hidden=VALUE'.length },
+-			{ start: findBytes(responseWithHiddenMetadata, encoder.encode('X-Trailer: value')), length: 'X-Trailer: value'.length },
+-		]
+-		assert.equal(
+-			validateTeeTranscriptContract(hiddenMetadata.bundle, hiddenMetadata.kPayload, hiddenMetadata.tPayload),
+-			'tls12-cbc',
+-		)
+-
+-		const responseWithHiddenHeader = encoder.encode(
+-			'HTTP/1.1 200 OK\r\nX-Secret: TOKEN\r\nContent-Length: 2\r\n\r\nOK',
+-		)
+-		const hiddenHeader = makeCbcContract(request, responseWithHiddenHeader, 99, 99)
+-		hiddenHeader.tPayload.tls12Cbc!.responseRedactionRanges = [{
+-			start: findBytes(responseWithHiddenHeader, encoder.encode('TOKEN')),
+-			length: 'TOKEN'.length,
+-		}]
+-		assert.equal(
+-			validateTeeTranscriptContract(hiddenHeader.bundle, hiddenHeader.kPayload, hiddenHeader.tPayload),
+-			'tls12-cbc',
+-		)
+-
+-		const invalidResponses = [
+-			'HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nOK',
+-			'HTTP/1.1 200 OK\r\nContent-Length: 2 \r\n\r\nOK',
+-			'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOKextra',
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nOK\r\n',
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nOK\r\n0\r\n',
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nOK\r\n0\r\n\r\nextra',
+-		]
+-		for(const response of invalidResponses) {
+-			const contract = makeCbcContract(request, encoder.encode(response), 99, 99)
+-			assert.throws(
+-				() => validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload),
+-				/TLS 1\.2 CBC/,
+-			)
+-		}
+-
+-		const hiddenFraming = makeCbcContract(
+-			request,
+-			encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK'),
+-			99,
+-			99,
+-		)
+-		hiddenFraming.tPayload.tls12Cbc!.responseRedactionRanges = [{
+-			start: findBytes(hiddenFraming.tPayload.tls12Cbc!.authenticatedRedactedResponse, encoder.encode('Content-Length')),
+-			length: 'Content-Length'.length,
+-		}]
+-		hiddenFraming.tPayload.tls12Cbc!.closeNotify = true
+-		assert.throws(
+-			() => validateTeeTranscriptContract(hiddenFraming.bundle, hiddenFraming.kPayload, hiddenFraming.tPayload),
+-			/redacts HTTP header structure/,
+-		)
+-
+-		const hiddenTransferEncoding = makeCbcContract(
+-			request,
+-			encoder.encode('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n0\r\n\r\n'),
+-			99,
+-			99,
+-		)
+-		hiddenTransferEncoding.tPayload.tls12Cbc!.responseRedactionRanges = [{
+-			start: findBytes(
+-				hiddenTransferEncoding.tPayload.tls12Cbc!.authenticatedRedactedResponse,
+-				encoder.encode('chunked'),
+-			),
+-			length: 'chunked'.length,
+-		}]
+-		hiddenTransferEncoding.tPayload.tls12Cbc!.closeNotify = true
+-		assert.throws(
+-			() => validateTeeTranscriptContract(
+-				hiddenTransferEncoding.bundle,
+-				hiddenTransferEncoding.kPayload,
+-				hiddenTransferEncoding.tPayload,
+-			),
+-			/redacts a framing header/,
+-		)
+-
+-		const emptyTransferCoding = makeCbcContract(
+-			request,
+-			encoder.encode('HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip,\r\n\r\nOK'),
+-			99,
+-			99,
+-		)
+-		emptyTransferCoding.tPayload.tls12Cbc!.closeNotify = true
+-		assert.throws(
+-			() => validateTeeTranscriptContract(
+-				emptyTransferCoding.bundle,
+-				emptyTransferCoding.kPayload,
+-				emptyTransferCoding.tPayload,
+-			),
+-			/invalid Transfer-Encoding/,
+-		)
+-	})
+-
+-	it('requires signed close_notify only for close-delimited CBC responses', () => {
+-		const contract = makeCbcContract(
+-			encoder.encode('request'),
+-			encoder.encode('HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nOK'),
+-			99,
+-			99,
+-		)
+-		assert.throws(
+-			() => validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload),
+-			/missing authenticated close_notify/,
+-		)
+-
+-		contract.tPayload.tls12Cbc!.closeNotify = true
+-		assert.equal(validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload), 'tls12-cbc')
+-	})
+-
+-	it('round-trips the additive CBC close_notify field', () => {
+-		const withClose = TLS12CBCTOutput.create({ closeNotify: true })
+-		const decoded = TLS12CBCTOutput.decode(TLS12CBCTOutput.encode(withClose).finish())
+-		assert.equal(decoded.closeNotify, true)
+-
+-		const oldEncoding = new Uint8Array()
+-		assert.equal(TLS12CBCTOutput.decode(oldEncoding).closeNotify, false)
+-	})
+-
+-	it('rejects legacy ZK TOPRF data for CBC', () => {
+-		const contract = makeCbcContract(encoder.encode('request'), encoder.encode('response'), 0, 0)
+-		contract.bundle.oprfVerifications = [OPRFVerificationData.create({
+-			streamPos: 0,
+-			streamLength: 1,
+-			publicSignalsJson: new Uint8Array([1]),
+-		})]
+-		assert.throws(
+-			() => validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload),
+-			/does not support legacy ZK TOPRF/,
+-		)
+-	})
+-
+-	it('uses matching CBC MPC OPRF outputs and rejects out-of-bounds positions', async() => {
+-		const request = encoder.encode('GET / HTTP/1.1\r\n\r\n')
+-		const response = encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nSECRET')
+-		const secretStart = findBytes(response, encoder.encode('SECRET'))
+-		const contract = makeCbcContract(request, response, 0, secretStart)
+-		const hashOutput = new Uint8Array(32).fill(9)
+-		const output = OPRFOutput.create({ tlsStart: secretStart, tlsLength: 6, hashOutput })
+-		contract.kPayload.oprfOutputs = [output]
+-		contract.tPayload.oprfOutputs = [OPRFOutput.create({
+-			...output,
+-			hashOutput: new Uint8Array(hashOutput),
+-		})]
+-
+-		const verified = verifyOprfMpcOutputs(contract.kPayload, contract.tPayload, logger)
+-		const transcript = await reconstructTlsTranscript(
+-			makeBundleData(contract.kPayload, contract.tPayload, 'tls12-cbc'),
+-			logger,
+-			verified,
+-		)
+-		assert.equal(
+-			decoder.decode(transcript.reconstructedResponse),
+-			`HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\n${bs58.encode(hashOutput)}`,
+-		)
+-
+-		contract.kPayload.oprfOutputs[0].tlsStart = response.length
+-		contract.tPayload.oprfOutputs[0].tlsStart = response.length
+-		assert.throws(
+-			() => verifyOprfMpcOutputs(contract.kPayload, contract.tPayload, logger),
+-			/exceeds authenticated response length/,
+-		)
+-	})
+-
+-	it('caps and de-duplicates MPC OPRF ranges', () => {
+-		const response = new Uint8Array(128)
+-		const contract = makeCbcContract(encoder.encode('request'), response, 99, 999)
+-		const makeOutput = (position: number) => OPRFOutput.create({
+-			tlsStart: position,
+-			tlsLength: 1,
+-			hashOutput: new Uint8Array(32).fill(position + 1),
+-		})
+-		contract.kPayload.oprfOutputs = Array.from({ length: MAX_TEE_OPRF_MPC_OUTPUTS }, (_, i) => makeOutput(i))
+-		contract.tPayload.oprfOutputs = contract.kPayload.oprfOutputs.map(output => OPRFOutput.create({
+-			...output,
+-			hashOutput: new Uint8Array(output.hashOutput),
+-		}))
+-		assert.equal(verifyOprfMpcOutputs(contract.kPayload, contract.tPayload, logger).length, MAX_TEE_OPRF_MPC_OUTPUTS)
+-
+-		contract.kPayload.oprfOutputs.push(makeOutput(MAX_TEE_OPRF_MPC_OUTPUTS))
+-		contract.tPayload.oprfOutputs.push(makeOutput(MAX_TEE_OPRF_MPC_OUTPUTS))
+-		assert.throws(
+-			() => verifyOprfMpcOutputs(contract.kPayload, contract.tPayload, logger),
+-			/Too many OPRF MPC outputs/,
+-		)
+-
+-		contract.kPayload.oprfOutputs = [makeOutput(3), makeOutput(3)]
+-		contract.tPayload.oprfOutputs = [makeOutput(3), makeOutput(3)]
+-		assert.throws(
+-			() => verifyOprfMpcOutputs(contract.kPayload, contract.tPayload, logger),
+-			/OPRF MPC ranges overlap/,
+-		)
+-	})
+-
+-	it('keeps the pre-CBC OPRF MPC count behavior unchanged', () => {
+-		const makeLegacyOutput = (position: number) => OPRFOutput.create({
+-			tlsStart: position,
+-			tlsLength: 1,
+-			hashOutput: new Uint8Array(32).fill(position + 1),
+-		})
+-		const count = MAX_TEE_OPRF_MPC_OUTPUTS + 1
+-		const kOutputs = Array.from({ length: count }, (_, index) => makeLegacyOutput(index))
+-		const tOutputs = kOutputs.map(output => OPRFOutput.create({
+-			...output,
+-			hashOutput: new Uint8Array(output.hashOutput),
+-		}))
+-		const kPayload = KOutputPayload.create({ oprfOutputs: kOutputs })
+-		const tPayload = TOutputPayload.create({
+-			oprfOutputs: tOutputs,
+-			consolidatedResponseCiphertext: new Uint8Array(count),
+-		})
+-
+-		assert.equal(verifyOprfMpcOutputs(kPayload, tPayload, logger).length, count)
+-	})
+-
+-	it('reconstructs CBC chunk trailers without treating them as chunk sizes', async() => {
+-		const response = encoder.encode(
+-			'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n' +
+-			'2;hidden=VALUE\r\nOK\r\n0\r\nX-Trailer: value\r\n\r\n',
+-		)
+-		const contract = makeCbcContract(encoder.encode('request'), response, 99, 999)
+-		assert.equal(validateTeeTranscriptContract(contract.bundle, contract.kPayload, contract.tPayload), 'tls12-cbc')
+-
+-		const transcript = await reconstructTlsTranscript(
+-			makeBundleData(contract.kPayload, contract.tPayload, 'tls12-cbc'),
+-			logger,
+-		)
+-		const reconstructed = decoder.decode(transcript.reconstructedResponse)
+-		assert.ok(reconstructed.endsWith('\r\n\r\nOK'))
+-		assert.ok(!reconstructed.includes('hidden=VALUE'))
+-		assert.ok(!reconstructed.includes('X-Trailer'))
+-	})
+-
+-	it('rejects OPRF ranges over chunk framing', async() => {
+-		const header = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'
+-		const response = encoder.encode(`${header}3\r\nabc\r\n5\r\ndefgh\r\n0\r\n\r\n`)
+-		const contract = makeCbcContract(encoder.encode('request'), response, 99, 999)
+-		const framingPosition = encoder.encode(header).length
+-		const output = OPRFOutput.create({
+-			tlsStart: framingPosition,
+-			tlsLength: 1,
+-			hashOutput: new Uint8Array(32).fill(7),
+-		})
+-		contract.kPayload.oprfOutputs = [output]
+-		contract.tPayload.oprfOutputs = [OPRFOutput.create({ ...output, hashOutput: new Uint8Array(output.hashOutput) })]
+-		const verified = verifyOprfMpcOutputs(contract.kPayload, contract.tPayload, logger)
+-
+-		await assert.rejects(
+-			reconstructTlsTranscript(makeBundleData(contract.kPayload, contract.tPayload, 'tls12-cbc'), logger, verified),
+-			/not wholly contained in HTTP chunk data/,
+-		)
+-	})
+-
+-	it('preserves the legacy split-AEAD reconstruction path', async() => {
+-		const request = encoder.encode('GET /legacy HTTP/1.1\r\n\r\n')
+-		const response = encoder.encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK')
+-		const keystream = new Uint8Array(response.length).fill(0x55)
+-		const ciphertext = response.map((value, index) => value ^ keystream[index])
+-		const kPayload = KOutputPayload.create({
+-			redactedRequest: request,
+-			consolidatedResponseKeystream: keystream,
+-			certificateInfo: testCertificate(),
+-			sessionId: 'legacy-session',
+-		})
+-		const tPayload = TOutputPayload.create({
+-			consolidatedResponseCiphertext: ciphertext,
+-			sessionId: 'legacy-session',
+-		})
+-		const bundle = VerificationBundle.create({})
+-
+-		assert.equal(validateTeeTranscriptContract(bundle, kPayload, tPayload), 'split-aead')
+-		const transcript = await reconstructTlsTranscript(
+-			makeBundleData(kPayload, tPayload, 'split-aead'),
+-			logger,
+-		)
+-		assert.deepEqual(transcript.revealedRequest, request)
+-		assert.deepEqual(transcript.reconstructedResponse, response)
+-	})
+-
+-	it('preserves pre-CBC chunk-boundary OPRF coordinate mapping', async() => {
+-		const header = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'
+-		const response = encoder.encode(`${header}3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n`)
+-		const keystream = new Uint8Array(response.length)
+-		const kPayload = KOutputPayload.create({
+-			redactedRequest: encoder.encode('GET /legacy HTTP/1.1\r\n\r\n'),
+-			consolidatedResponseKeystream: keystream,
+-			certificateInfo: testCertificate(),
+-			sessionId: 'legacy-chunk-session',
+-		})
+-		const tPayload = TOutputPayload.create({
+-			consolidatedResponseCiphertext: response,
+-			sessionId: 'legacy-chunk-session',
+-		})
+-		const firstChunkStart = findBytes(response, encoder.encode('abc'))
+-		const output = new Uint8Array(32).fill(8)
+-
+-		const transcript = await reconstructTlsTranscript(
+-			makeBundleData(kPayload, tPayload, 'split-aead'),
+-			logger,
+-			[{ position: firstChunkStart + 3, length: 3, output, isMPC: true }],
+-		)
+-		assert.ok(decoder.decode(transcript.reconstructedResponse).endsWith(`\r\n\r\nabc${bs58.encode(output)}`))
+-	})
+-
+-	it('accepts an encoded pre-CBC standalone bundle', async() => {
+-		const timestampMs = Date.now()
+-		const kPayload = KOutputPayload.create({
+-			redactedRequest: encoder.encode('GET /legacy HTTP/1.1\r\n\r\n'),
+-			consolidatedResponseKeystream: new Uint8Array([1, 2]),
+-			certificateInfo: testCertificate(),
+-			timestampMs,
+-			sessionId: 'pre-cbc-session',
+-		})
+-		const tPayload = TOutputPayload.create({
+-			consolidatedResponseCiphertext: new Uint8Array([3, 4]),
+-			timestampMs,
+-			sessionId: 'pre-cbc-session',
+-		})
+-		const teekWallet = Wallet.createRandom()
+-		const teetWallet = Wallet.createRandom()
+-		const kBody = KOutputPayload.encode(kPayload).finish()
+-		const tBody = TOutputPayload.encode(tPayload).finish()
+-		const bundle = VerificationBundle.create({
+-			teekSigned: SignedMessage.create({
+-				bodyType: BodyType.BODY_TYPE_K_OUTPUT,
+-				body: kBody,
+-				ethAddress: encoder.encode(teekWallet.address),
+-				signature: await ETH_SIGNATURE_PROVIDER.sign(kBody, teekWallet.privateKey),
+-			}),
+-			teetSigned: SignedMessage.create({
+-				bodyType: BodyType.BODY_TYPE_T_OUTPUT,
+-				body: tBody,
+-				ethAddress: encoder.encode(teetWallet.address),
+-				signature: await ETH_SIGNATURE_PROVIDER.sign(tBody, teetWallet.privateKey),
+-			}),
+-		})
+-
+-		const previousStandalone = process.env.TEE_STANDALONE
+-		process.env.TEE_STANDALONE = 'true'
+-		try {
+-			const verified = await verifyTeeBundle(VerificationBundle.encode(bundle).finish(), logger)
+-			assert.equal(verified.protocolMode, 'split-aead')
+-			assert.equal(verified.teeSessionId, 'pre-cbc-session')
+-		} finally {
+-			if(previousStandalone === undefined) {
+-				delete process.env.TEE_STANDALONE
+-			} else {
+-				process.env.TEE_STANDALONE = previousStandalone
+-			}
+-		}
+-	})
+-
+-	it('decodes and re-encodes pre-CBC protobuf bytes exactly', () => {
+-		// Generated with the pre-CBC codec from attestor-core HEAD^.
+-		const kWire = new Uint8Array(Buffer.from(
+-			'0a03474554120f080110011a0973656e7369746976651a030102032a040802100130c0c4073a066c6567616379',
+-			'hex',
+-		))
+-		const tWire = new Uint8Array(Buffer.from(
+-			'0a0304050612010918c0c40722066c6567616379',
+-			'hex',
+-		))
+-		const bundleWire = new Uint8Array(Buffer.from(
+-			'0a370801122d0a03474554120f080110011a0973656e7369746976651a030102032a040802100130c0c4073a066c65676163791a0108220107121e080212140a0304050612010918c0c40722066c65676163791a010b22010a',
+-			'hex',
+-		))
+-
+-		const kPayload = KOutputPayload.decode(kWire)
+-		const tPayload = TOutputPayload.decode(tWire)
+-		assert.equal(kPayload.tls12Cbc, undefined)
+-		assert.equal(tPayload.tls12Cbc, undefined)
+-		assert.deepEqual(KOutputPayload.encode(kPayload).finish(), kWire)
+-		assert.deepEqual(TOutputPayload.encode(tPayload).finish(), tWire)
+-		assert.deepEqual(VerificationBundle.encode(VerificationBundle.decode(bundleWire)).finish(), bundleWire)
+-	})
+-})
+-
+-function makeCbcContract(
+-	request: Uint8Array,
+-	response: Uint8Array,
+-	requestSecret: number,
+-	responseSecret: number,
+-) {
+-	const binding = TLS12CBCSessionBinding.create({
+-		contractVersion: 1,
+-		cipherSuite: 0xc013,
+-		recordMode: TLS12CBCRecordMode.TLS12_CBC_RECORD_MODE_MAC_THEN_ENCRYPT,
+-		extendedMasterSecret: true,
+-		sessionBinding: new Uint8Array(32).fill(7),
+-	})
+-	const requestRanges = request.length >= requestSecret + 6
+-		? [{ start: requestSecret, length: 6, type: 'sensitive' }]
+-		: []
+-	const responseRanges = response.length >= responseSecret + 6
+-		? [{ start: responseSecret, length: 6 }]
+-		: []
+-	const kPayload = KOutputPayload.create({
+-		certificateInfo: testCertificate(),
+-		timestampMs: Date.now(),
+-		sessionId: 'cbc-session',
+-		tls12Cbc: TLS12CBCKOutput.create({
+-			binding,
+-			authenticatedRedactedRequest: request,
+-			requestRecordsSha256: new Uint8Array(32).fill(1),
+-			requestRedactionRanges: requestRanges,
+-		}),
+-	})
+-	const tPayload = TOutputPayload.create({
+-		timestampMs: Date.now(),
+-		sessionId: 'cbc-session',
+-		tls12Cbc: TLS12CBCTOutput.create({
+-			binding: TLS12CBCSessionBinding.create({
+-				...binding,
+-				sessionBinding: new Uint8Array(binding.sessionBinding),
+-			}),
+-			authenticatedRedactedResponse: response,
+-			responseRecordsSha256: new Uint8Array(32).fill(2),
+-			responseRedactionRanges: responseRanges,
+-			plaintextRecordLengths: [response.length],
+-		}),
+-	})
+-	return { bundle: VerificationBundle.create({}), kPayload, tPayload }
+-}
+-
+-function makeBundleData(
+-	kOutputPayload: KOutputPayload,
+-	tOutputPayload: TOutputPayload,
+-	protocolMode: TeeBundleData['protocolMode'],
+-): TeeBundleData {
+-	const emptyK = SignedMessage.create({ bodyType: BodyType.BODY_TYPE_K_OUTPUT })
+-	const emptyT = SignedMessage.create({ bodyType: BodyType.BODY_TYPE_T_OUTPUT })
+-	return {
+-		teekSigned: emptyK,
+-		teetSigned: emptyT,
+-		kOutputPayload,
+-		tOutputPayload,
+-		teekPcr0: 'test-k',
+-		teetPcr0: 'test-t',
+-		teeSessionId: kOutputPayload.sessionId,
+-		protocolMode,
+-	}
+-}
+-
+-function testCertificate() {
+-	return CertificateInfo.create({
+-		commonName: 'example.com',
+-		dnsNames: ['example.com'],
+-		notBeforeUnix: 1,
+-		notAfterUnix: 4_000_000_000,
+-	})
+-}
+-
+-function findBytes(haystack: Uint8Array, needle: Uint8Array): number {
+-	for(let start = 0; start <= haystack.length - needle.length; start++) {
+-		let match = true
+-		for(let offset = 0; offset < needle.length; offset++) {
+-			if(haystack[start + offset] !== needle[offset]) {
+-				match = false
+-				break
+-			}
+-		}
+-		if(match) {
+-			return start
+-		}
+-	}
+-	throw new Error('test fixture substring not found')
+-}
+diff --git a/src/tests/tee-secure-boot-compat.test.ts b/src/tests/tee-secure-boot-compat.test.ts
+deleted file mode 100644
+index b748d2f..0000000
+--- a/src/tests/tee-secure-boot-compat.test.ts
++++ /dev/null
+@@ -1,21 +0,0 @@
+-import assert from 'node:assert'
+-import test from 'node:test'
+-
+-import { resolveSignedAttestationType } from '#src/server/utils/tee-verification.ts'
+-
+-test('signed Secure Boot marker upgrades legacy-compatible report type', () => {
+-	assert.equal(resolveSignedAttestationType('secure-boot', 'sev-snp'), 'secure-boot')
+-	assert.equal(resolveSignedAttestationType('secure-boot', 'secure-boot'), 'secure-boot')
+-})
+-
+-test('bundles without the signed marker keep their existing verifier', () => {
+-	assert.equal(resolveSignedAttestationType('', 'gcp'), 'gcp')
+-	assert.equal(resolveSignedAttestationType('', 'sev-snp'), 'sev-snp')
+-	assert.equal(resolveSignedAttestationType('', 'secure-boot'), 'secure-boot')
+-})
+-
+-test('signed generation rejects incompatible report types', () => {
+-	assert.throws(() => resolveSignedAttestationType('sev-snp', 'secure-boot'), /incompatible/)
+-	assert.throws(() => resolveSignedAttestationType('secure-boot', 'gcp'), /incompatible/)
+-	assert.throws(() => resolveSignedAttestationType('unknown', 'sev-snp'), /incompatible/)
+-})
+diff --git a/src/tests/utils/claim-context.ts b/src/tests/utils/claim-context.ts
+index d4538e3..072de5c 100644
+--- a/src/tests/utils/claim-context.ts
++++ b/src/tests/utils/claim-context.ts
+@@ -1,14 +1,29 @@
++import { createHash } from 'node:crypto'
++
+ export const TEST_SESSION_ID = 'bound-session-id'
+ export const TEST_CHAIN_IDS: readonly string[] = ['10143']
+ export const TEST_CONTEXT_ADDRESS = '0x3333333333333333333333333333333333333333'
+ export const TEST_AUCTION_ADDRESS = '0x4444444444444444444444444444444444444444'
+ export const TEST_CONTEXT_MESSAGE = `register:10143:${TEST_AUCTION_ADDRESS}:nonce`
+ export const TEST_PROVIDER_HASH = `0x${'a'.repeat(64)}`
++export const TEST_IDENTITY_PROVIDER = 'github'
++
++export function testAuthIdentity(
++	contextMessage = TEST_CONTEXT_MESSAGE,
++	contextAddress = TEST_CONTEXT_ADDRESS,
++	sessionId = TEST_SESSION_ID,
++	providerHash = TEST_PROVIDER_HASH
++) {
++	const messageDigest = `sha256:${createHash('sha256').update(contextMessage).digest('hex')}`
++	const scopeDigest = createHash('sha256').update(`${contextAddress}:${messageDigest}`).digest('hex')
++	return `umia1:${sessionId}:${TEST_IDENTITY_PROVIDER}:${providerHash}:${scopeDigest}`
++}
+ 
+ export function inputContext(sessionId = TEST_SESSION_ID) {
+ 	return JSON.stringify({
+ 		contextAddress: TEST_CONTEXT_ADDRESS,
+ 		contextMessage: TEST_CONTEXT_MESSAGE,
++		identityProvider: TEST_IDENTITY_PROVIDER,
+ 		reclaimSessionId: sessionId
+ 	})
+ }
+@@ -18,6 +33,7 @@ export function signedContext(account = 'synthetic-commitment', sessionId = TEST
+ 		contextAddress: TEST_CONTEXT_ADDRESS,
+ 		contextMessage: TEST_CONTEXT_MESSAGE,
+ 		extractedParameters: { account },
++		identityProvider: TEST_IDENTITY_PROVIDER,
+ 		providerHash: TEST_PROVIDER_HASH,
+ 		reclaimSessionId: sessionId
+ 	})
+diff --git a/src/tests/utils/sec-hardening-reasons.ts b/src/tests/utils/sec-hardening-reasons.ts
+new file mode 100644
+index 0000000..741ea88
+--- /dev/null
++++ b/src/tests/utils/sec-hardening-reasons.ts
+@@ -0,0 +1,8 @@
++/** Reasons added by the sec-hardening layer; sec-hardening.test.ts exercises each. */
++export const SEC_HARDENING_REASONS: readonly string[] = [
++	'AUTH_LIFETIME_INVALID',
++	'INIT_TIMEOUT',
++	'CERTIFICATE_FETCH_DISABLED',
++	'TOPRF_DISABLED',
++	'AUTH_SOCKET_LIMIT'
++]
+diff --git a/src/utils/auth.ts b/src/utils/auth.ts
+index 0be4ca2..384296c 100644
+--- a/src/utils/auth.ts
++++ b/src/utils/auth.ts
+@@ -1,6 +1,6 @@
+ import { getBytes } from 'ethers'
+ 
+-import { DEFAULT_AUTH_EXPIRY_S } from '#src/config/index.ts'
++import { DEFAULT_AUTH_EXPIRY_S, MAX_AUTH_CLOCK_SKEW_S, MAX_AUTH_LIFETIME_S } from '#src/config/index.ts'
+ import type { AuthenticationRequest, ServiceSignatureType } from '#src/proto/api.ts'
+ import { AuthenticatedUserData } from '#src/proto/api.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+@@ -50,6 +50,19 @@ export async function assertValidAuthRequest(
+ 	if(!verified) {
+ 		throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_INVALID', 'Signature verification failed')
+ 	}
++
++	assertAuthLifetime(data)
++}
++
++// A leaked auth stays usable until expiry, and there is no revocation channel.
++function assertAuthLifetime({ createdAt, expiresAt }: AuthenticatedUserData) {
++	if(
++		createdAt > unixTimestampSeconds() + MAX_AUTH_CLOCK_SKEW_S
++		|| expiresAt <= createdAt
++		|| expiresAt - createdAt > MAX_AUTH_LIFETIME_S
++	) {
++		throw rejection('ERROR_AUTHENTICATION_FAILED', 'AUTH_LIFETIME_INVALID', 'Authentication lifetime is not allowed')
++	}
+ }
+ 
+ function assertAuthNotExpired(data: AuthenticatedUserData) {
+diff --git a/src/utils/rejection-reason.ts b/src/utils/rejection-reason.ts
+index 281c9ab..8d4dcc2 100644
+--- a/src/utils/rejection-reason.ts
++++ b/src/utils/rejection-reason.ts
+@@ -29,7 +29,12 @@ export const REJECTION_REASONS = {
+ 	CLAIM_PROVIDER_UNSUPPORTED: 'claim provider other than http',
+ 	CLAIM_PARAMS_INVALID: 'claim parameters not canonical JSON with a string url',
+ 	CLAIM_URL_MISMATCH: 'claim URL not canonical HTTPS on port 443 at the tunnel host',
+-	TEE_CLAIMS_DISABLED: 'claimTeeBundle, disabled until TEE outputs bind the endpoint'
++	TEE_CLAIMS_DISABLED: 'claimTeeBundle, disabled until TEE outputs bind the endpoint',
++	AUTH_LIFETIME_INVALID: 'auth createdAt over 60 s ahead, or expiresAt not within 15 min after createdAt',
++	INIT_TIMEOUT: 'socket not initialised within 5 s of connecting',
++	CERTIFICATE_FETCH_DISABLED: 'fetchCertificateBytes or an AIA issuer fetch, disabled: the URL is client-chosen',
++	TOPRF_DISABLED: 'toprf RPC, disabled: Umia recipes use oprf-raw inside claimTunnel',
++	AUTH_SOCKET_LIMIT: 'init while MAX_SOCKETS_PER_AUTH sockets on this instance hold the same auth ID'
+ } as const
+ export type RejectionReason = keyof typeof REJECTION_REASONS
+ 
+diff --git a/src/server/utils/assert-valid-claim-request.ts b/src/server/utils/assert-valid-claim-request.ts
+index f5b7625..c1f7b90 100644
+--- a/src/server/utils/assert-valid-claim-request.ts
++++ b/src/server/utils/assert-valid-claim-request.ts
+@@ -34,6 +34,7 @@ import {
+ 	verifyZkPacket
+ } from '#src/utils/index.ts'
+ import { rejection, withRejectionReason } from '#src/utils/rejection-reason.ts'
++import { restoreStwoProofs } from '#src/server/utils/stwo-proof-compression.ts'
+ import { getEngineString } from '#src/utils/zk.ts'
+ 
+ /**
+@@ -78,6 +79,8 @@ export async function assertValidClaimRequest(
+ 	if(!verified) {
+ 		throw rejection('ERROR_INVALID_CLAIM', 'CLAIM_SIGNATURE_INVALID', 'Invalid signature on claim request')
+ 	}
++	// Keep the signature bound to the encoded bytes; inflate only afterwards.
++	restoreStwoProofs(request)
+ 
+ 	let receipt: Awaited<ReturnType<typeof decryptTranscript>>
+ 	try {
+diff --git a/src/server/utils/stwo-proof-compression.ts b/src/server/utils/stwo-proof-compression.ts
+new file mode 100644
+index 0000000..b964722
+--- /dev/null
++++ b/src/server/utils/stwo-proof-compression.ts
+@@ -0,0 +1,37 @@
++import { inflateSync } from 'node:zlib'
++import { ZKProofEngine, type ClaimTunnelRequest } from '#src/proto/api.ts'
++import { AttestorError } from '#src/utils/index.ts'
++
++const MAGIC = Buffer.from('UMIA_STWO_ZLIB_V1\0')
++const MAX_PROOF_BYTES = 4 * 1024 * 1024
++const MAX_TOTAL_PROOF_BYTES = 32 * 1024 * 1024
++
++/** Called only after the signed request has been verified. */
++export function restoreStwoProofs(request: ClaimTunnelRequest) {
++	let totalBytes = 0
++	for(const packet of request.transcript) {
++		for(const proof of packet.reveal?.zkReveal?.proofs ?? []) {
++			const encoded = proof.proofData
++			if(encoded.length >= MAGIC.length
++				&& Buffer.compare(encoded.subarray(0, MAGIC.length), MAGIC) === 0) {
++				if(request.zkEngine !== ZKProofEngine.ZK_ENGINE_STWO) {
++					throw AttestorError.badRequest('Compressed proof requires Stwo')
++				}
++				try {
++					proof.proofData = inflateSync(encoded.subarray(MAGIC.length), {
++						maxOutputLength: MAX_PROOF_BYTES
++					})
++				} catch {
++					throw AttestorError.badRequest('Invalid compressed proof')
++				}
++			}
++			if(proof.proofData.length > MAX_PROOF_BYTES) {
++				throw AttestorError.badRequest('Proof too large')
++			}
++			totalBytes += proof.proofData.length
++			if(totalBytes > MAX_TOTAL_PROOF_BYTES) {
++				throw AttestorError.badRequest('Total proof bytes too large')
++			}
++		}
++	}
++}
+diff --git a/src/tests/stwo-proof-compression.test.ts b/src/tests/stwo-proof-compression.test.ts
+new file mode 100644
+index 0000000..bb1444a
+--- /dev/null
++++ b/src/tests/stwo-proof-compression.test.ts
+@@ -0,0 +1,31 @@
++import assert from 'node:assert/strict'
++import { deflateSync } from 'node:zlib'
++import { it } from 'node:test'
++import { ClaimTunnelRequest, ZKProofEngine } from '#src/proto/api.ts'
++import { restoreStwoProofs } from '#src/server/utils/stwo-proof-compression.ts'
++
++const magic = Buffer.from('UMIA_STWO_ZLIB_V1\0')
++function request(proofData: Uint8Array, engine = ZKProofEngine.ZK_ENGINE_STWO) {
++	return ClaimTunnelRequest.create({
++		zkEngine: engine,
++		transcript: [{ reveal: { zkReveal: { proofs: [{ proofData }] } } }]
++	})
++}
++
++it('restores compressed Stwo proofs and accepts legacy proof bytes', () => {
++	const raw = new Uint8Array(200_000).fill(0x41)
++	const compressed = request(Buffer.concat([magic, deflateSync(raw)]))
++	restoreStwoProofs(compressed)
++	assert.equal(Buffer.compare(compressed.transcript[0].reveal?.zkReveal?.proofs[0].proofData ?? new Uint8Array(), raw), 0)
++	const legacy = request(raw)
++	restoreStwoProofs(legacy)
++	assert.equal(legacy.transcript[0].reveal?.zkReveal?.proofs[0].proofData, raw)
++})
++
++it('rejects compressed proofs for another engine and bounded decompression', () => {
++	const raw = new Uint8Array(4 * 1024 * 1024 + 1).fill(0x41)
++	const encoded = Buffer.concat([magic, deflateSync(raw)])
++	assert.throws(() => restoreStwoProofs(request(encoded, ZKProofEngine.ZK_ENGINE_SNARKJS)))
++	assert.throws(() => restoreStwoProofs(request(encoded)))
++	assert.throws(() => restoreStwoProofs(request(Buffer.concat([magic, new Uint8Array([1, 2, 3])]))))
++})

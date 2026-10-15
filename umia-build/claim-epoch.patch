@@ -1,0 +1,201 @@
+diff --git a/src/config/claim-epoch.ts b/src/config/claim-epoch.ts
+new file mode 100644
+index 0000000..436badc
+--- /dev/null
++++ b/src/config/claim-epoch.ts
+@@ -0,0 +1,11 @@
++/** The server signs claims for exactly one configured uint32 witness epoch. */
++export function parseClaimEpoch(raw: string | undefined): number {
++	const epoch = Number(raw)
++	if(!raw || !/^[1-9][0-9]*$/.test(raw) || epoch > 4294967295) {
++		throw new Error('CLAIM_EPOCH must be a canonical decimal uint32 from 1 to 4294967295')
++	}
++
++	return epoch
++}
++
++export const CLAIM_EPOCH = parseClaimEpoch(process.env.CLAIM_EPOCH)
+diff --git a/src/scripts/start-server.ts b/src/scripts/start-server.ts
+index f5cf005..d09e61f 100644
+--- a/src/scripts/start-server.ts
++++ b/src/scripts/start-server.ts
+@@ -1,3 +1,4 @@
++import '#src/config/claim-epoch.ts'
+ import '#src/server/utils/config-env.ts'
+ 
+ import { setCryptoImplementation } from '@reclaimprotocol/tls'
+diff --git a/src/server/handlers/claimTeeBundle.ts b/src/server/handlers/claimTeeBundle.ts
+index dd324cb..4ce9344 100644
+--- a/src/server/handlers/claimTeeBundle.ts
++++ b/src/server/handlers/claimTeeBundle.ts
+@@ -3,6 +3,7 @@
+  * Handles ClaimTeeBundleRequest by verifying TEE attestations and reconstructing TLS transcript
+  */
+ 
++import { CLAIM_EPOCH } from '#src/config/claim-epoch.ts'
+ import type { InitRequest, ProviderClaimInfo } from '#src/proto/api.ts'
+ import { ClaimTeeBundleResponse } from '#src/proto/api.ts'
+ import type { CertificateInfo } from '#src/proto/tee-bundle.ts'
+@@ -101,8 +102,7 @@ export const claimTeeBundle: RPCHandler<'claimTeeBundle'> = async(
+ 		identifier: getIdentifierFromClaimInfo(validatedClaim),
+ 		// Use timestampS from TEE_K bundle for claim signing
+ 		timestampS,
+-		// hardcode for compatibility with V1 claims
+-		epoch: 1
++		epoch: CLAIM_EPOCH
+ 	}
+ 
+ 	logger.info({ claim: res.claim }, 'TEE bundle claim validation successful')
+diff --git a/src/server/handlers/claimTunnel.ts b/src/server/handlers/claimTunnel.ts
+index 0d7a3c3..527fdd2 100644
+--- a/src/server/handlers/claimTunnel.ts
++++ b/src/server/handlers/claimTunnel.ts
+@@ -1,3 +1,4 @@
++import { CLAIM_EPOCH } from '#src/config/claim-epoch.ts'
+ import { MAX_CLAIM_TIMESTAMP_DIFF_S } from '#src/config/index.ts'
+ import { ClaimTunnelResponse } from '#src/proto/api.ts'
+ import { getApm } from '#src/server/utils/apm.ts'
+@@ -73,8 +74,7 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+ 			res.claim = {
+ 				...claim,
+ 				identifier: getIdentifierFromClaimInfo(claim),
+-				// hardcode for compatibility with V1 claims
+-				epoch: 1
++				epoch: CLAIM_EPOCH
+ 			}
+ 		} catch(err) {
+ 			assertTx?.setOutcome('failure')
+diff --git a/src/tests/claim-epoch.test.ts b/src/tests/claim-epoch.test.ts
+new file mode 100644
+index 0000000..5197b4e
+--- /dev/null
++++ b/src/tests/claim-epoch.test.ts
+@@ -0,0 +1,128 @@
++import assert from 'node:assert/strict'
++import { spawnSync } from 'node:child_process'
++import { describe, it, mock } from 'node:test'
++
++import type { ClaimTeeBundleResponse, ClaimTunnelResponse } from '#src/proto/api.ts'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++
++const claimInfo = {
++	provider: 'http',
++	parameters: '{}',
++	context: '{}',
++	owner: '0x0000000000000000000000000000000000000001',
++	timestampS: Math.floor(Date.now() / 1000)
++}
++const logger = { info() {}, debug() {}, warn() {}, error() {} }
++
++mock.module('#src/server/utils/assert-valid-claim-request.ts', {
++	namedExports: {
++		assertTranscriptsMatch() {},
++		async assertValidClaimRequest() { return { ...claimInfo } },
++		async assertValidProviderTranscript() { return { ...claimInfo } }
++	}
++})
++mock.module('#src/server/utils/tee-verification.ts', {
++	namedExports: {
++		async verifyTeeBundle() {
++			return {
++				kOutputPayload: { timestampMs: claimInfo.timestampS * 1000 },
++				tOutputPayload: {}
++			}
++		}
++	}
++})
++mock.module('#src/server/utils/tee-transcript-reconstruction.ts', {
++	namedExports: {
++		async reconstructTlsTranscript() {
++			return { revealedRequest: new Uint8Array(), reconstructedResponse: new Uint8Array() }
++		}
++	}
++})
++
++const [{ parseClaimEpoch }, { claimTunnel }, { claimTeeBundle }, proto, claims, signatures] = await Promise.all([
++	import('#src/config/claim-epoch.ts'),
++	import('#src/server/handlers/claimTunnel.ts'),
++	import('#src/server/handlers/claimTeeBundle.ts'),
++	import('#src/proto/api.ts'),
++	import('#src/utils/claims.ts'),
++	import('#src/utils/signatures/index.ts')
++])
++const signatureType = proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH
++const verify = signatures.SIGNATURES[signatureType].verify
++const wrongSigner = '0x0000000000000000000000000000000000000002'
++const client = {
++	metadata: { signatureType, clientVersion: proto.AttestorVersion.ATTESTOR_VERSION_3_2_0 },
++	getTunnel() {
++		return {
++			createRequest: { host: 'example.com', port: 443, geoLocation: '', proxySessionId: '' },
++			transcript: [],
++			async close() {}
++		}
++	},
++	removeTunnel() {}
++}
++
++type SignedResponse = ClaimTunnelResponse | ClaimTeeBundleResponse
++
++async function assertSignatures<T extends SignedResponse>(
++	res: T,
++	codec: { encode(message: T): { finish(): Uint8Array } }
++) {
++	const claim = res.claim
++	const signature = res.signatures
++	assert.ok(claim)
++	assert.ok(signature)
++	assert.equal(claim.epoch, 2)
++	assert.ok(signature.claimSignature.length)
++	assert.ok(signature.resultSignature.length)
++	const address = signature.attestorAddress
++	const claimBytes = new TextEncoder().encode(claims.createSignDataForClaim(claim))
++	assert.equal(await verify(claimBytes, signature.claimSignature, address), true)
++	assert.equal(await verify(codec.encode({ ...res, signatures: undefined }).finish(), signature.resultSignature, address), true)
++	assert.equal(await verify(claimBytes, signature.claimSignature, wrongSigner), false)
++	assert.equal(await verify(codec.encode({ ...res, signatures: undefined }).finish(), signature.resultSignature, wrongSigner), false)
++	const tamperedClaim = { ...claim, epoch: 3 }
++	const tampered = { ...res, claim: tamperedClaim, signatures: undefined } as T
++	const tamperedClaimBytes = new TextEncoder().encode(claims.createSignDataForClaim(tamperedClaim))
++	assert.equal(await verify(tamperedClaimBytes, signature.claimSignature, address), false)
++	assert.equal(await verify(codec.encode(tampered).finish(), signature.resultSignature, address), false)
++}
++
++describe('CLAIM_EPOCH', () => {
++	it('accepts only canonical positive decimal uint32 values', () => {
++		for(const [raw, expected] of [['1', 1], ['2', 2], ['4294967295', 4294967295]] as const) {
++			assert.equal(parseClaimEpoch(raw), expected)
++		}
++		for(const raw of [undefined, '', '0', '-1', '+1', '01', ' 1', '1 ', '1.0', '1e0', '0x1', '4294967296', '999999999999999999999999']) {
++			assert.throws(() => parseClaimEpoch(raw), /CLAIM_EPOCH/)
++		}
++	})
++
++	it('fails before the server listener for missing and invalid epochs', () => {
++		for(const raw of [undefined, '0', '4294967296']) {
++			const env = { ...process.env }
++			if(raw === undefined) delete env.CLAIM_EPOCH
++			else env.CLAIM_EPOCH = raw
++			const result = spawnSync(process.execPath, ['--experimental-strip-types', 'src/scripts/start-server.ts'], { env, encoding: 'utf8', timeout: 10_000 })
++			assert.notEqual(result.status, 0)
++			assert.match(result.stderr, /CLAIM_EPOCH must be a canonical decimal uint32/)
++		}
++	})
++
++	it('stamps and signs both claimTunnel and claimTeeBundle at epoch 2', async () => {
++		const ctx = { logger, client } as unknown as Parameters<typeof claimTunnel>[1]
++		const tunnel = await claimTunnel(proto.ClaimTunnelRequest.create({
++			request: { id: 1, host: 'example.com', port: 443 },
++			data: { timestampS: claimInfo.timestampS }
++		}), ctx)
++		await assertSignatures(tunnel, proto.ClaimTunnelResponse)
++
++		const tee = await claimTeeBundle(proto.ClaimTeeBundleRequest.create({
++			verificationBundle: new Uint8Array(),
++			data: { ...claimInfo }
++		}), ctx)
++		await assertSignatures(tee, proto.ClaimTeeBundleResponse)
++	})
++})
