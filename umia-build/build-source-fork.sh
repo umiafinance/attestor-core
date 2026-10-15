@@ -46,12 +46,22 @@ while IFS=$'\t' read -r kind value digest; do
     esac
 done <<< "$manifest_rows"
 
+# BSD sha256sum (macOS) lacks --check --status; hashing stdin works on both.
+check_sha256() {
+    local actual
+    actual=$(sha256sum < "$2")
+    if [[ "${actual%% *}" != "$1" ]]; then
+        echo "sha256 mismatch: $2" >&2
+        exit 1
+    fi
+}
+
 build_dir=$(mktemp -d)
 trap 'rm -rf "$build_dir"' EXIT
 for entry in "${patches[@]}"; do
     patch_file=${entry%%:*}
     patch_sha=${entry#*:}
-    printf '%s  %s\n' "$patch_sha" "$script_dir/$patch_file" | sha256sum --check --status
+    check_sha256 "$patch_sha" "$script_dir/$patch_file"
 done
 
 git clone --quiet --filter=blob:none --no-checkout https://github.com/reclaimprotocol/attestor-core.git "$build_dir/upstream"
@@ -69,8 +79,8 @@ for entry in "${patches[@]}"; do
 done
 cp "$script_dir/entrypoint.sh" "$build_dir/context/entrypoint.sh"
 if [[ -n "$package_sha" ]]; then
-    printf '%s  %s\n' "$package_sha" "$build_dir/context/package.json" | sha256sum --check --status
-    printf '%s  %s\n' "$lock_sha" "$build_dir/context/package-lock.json" | sha256sum --check --status
+    check_sha256 "$package_sha" "$build_dir/context/package.json"
+    check_sha256 "$lock_sha" "$build_dir/context/package-lock.json"
 fi
 node - "$manifest_file" "$layer" > "$build_dir/context/umia-source-manifest.json" <<'NODE'
 const fs = require('node:fs')
@@ -139,6 +149,6 @@ case "${1:-}" in
         if [[ -n "${ATTESTOR_DOCKER_BUILD_NETWORK:-}" ]]; then
             build_args+=(--network "$ATTESTOR_DOCKER_BUILD_NETWORK")
         fi
-        docker build "${build_args[@]}" -f "$script_dir/Dockerfile" -t "$image_tag" "$build_dir/context"
+        docker build ${build_args[@]+"${build_args[@]}"} -f "$script_dir/Dockerfile" -t "$image_tag" "$build_dir/context"
         ;;
 esac
