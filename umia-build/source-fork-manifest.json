@@ -65,12 +65,18 @@
       "tests": ["admission-diagnostics.test.ts"]
     },
     {
-      "layer": "final",
+      "layer": "hardening",
       "file": "sec-hardening.patch",
       "sha256": "0d5eba781b91f1c98619ddc113874dc079c484b5b904411c6b0384105d8e171f",
       "tests": ["sec-hardening.test.ts", "stwo-proof-compression.test.ts"]
+    },
+    {
+      "layer": "final",
+      "file": "certificate-trust.patch",
+      "sha256": "30d49cf660b68ca40b74882913249b84374dcea593ef79adebc0f29d57468019",
+      "tests": ["certificate-trust.test.ts"]
     }
   ],
-  "packageSha256": "ec869ed2a716a865097a0e2e9c391f179caec3c9e74d300133c5630f6834c8aa",
-  "packageLockSha256": "aaf7636ce4989bee1958a9a6afc955f75f8e9aea62f7637c31bdcdd76968ef64"
+  "packageSha256": "4f52767c3b0ebc92996f935be2c1271f5f2dd45a79fa17cf8c6b85d1fbf0f06f",
+  "packageLockSha256": "71620f569196b1c9ca46df83d14c4568bf398c501877ebebb8312c18eea3f3a3"
 }

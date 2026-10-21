@@ -34,7 +34,8 @@ export const REJECTION_REASONS = {
 	INIT_TIMEOUT: 'socket not initialised within 5 s of connecting',
 	CERTIFICATE_FETCH_DISABLED: 'fetchCertificateBytes or an AIA issuer fetch, disabled: the URL is client-chosen',
 	TOPRF_DISABLED: 'toprf RPC, disabled: Umia recipes use oprf-raw inside claimTunnel',
-	AUTH_SOCKET_LIMIT: 'init while MAX_SOCKETS_PER_AUTH sockets on this instance hold the same auth ID'
+	AUTH_SOCKET_LIMIT: 'init while MAX_SOCKETS_PER_AUTH sockets on this instance hold the same auth ID',
+	CERTIFICATE_DISTRUSTED: 'provider TLS chain uses a compromised eMudhra CA key (October 2026) or is issued under emSign ECC Root CA - G3 or AAA Certificate Services'
 } as const
 export type RejectionReason = keyof typeof REJECTION_REASONS
 

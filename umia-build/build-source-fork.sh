@@ -11,8 +11,8 @@ manifest_rows=$(node - "$manifest_file" "$layer" <<'NODE'
 const fs = require('node:fs')
 const [file, layer] = process.argv.slice(2)
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
-const layers = ['epoch', 'auth', 'log', 'host', 'deps', 'consolidate', 'diagnostics', 'final']
-const files = ['claim-epoch.patch', 'auth-lifetime.patch', 'log-privacy.patch', 'host-policy.patch', 'dependency-remediation.patch', 'source-consolidation.patch', 'admission-diagnostics.patch', 'sec-hardening.patch']
+const layers = ['epoch', 'auth', 'log', 'host', 'deps', 'consolidate', 'diagnostics', 'hardening', 'final']
+const files = ['claim-epoch.patch', 'auth-lifetime.patch', 'log-privacy.patch', 'host-policy.patch', 'dependency-remediation.patch', 'source-consolidation.patch', 'admission-diagnostics.patch', 'sec-hardening.patch', 'certificate-trust.patch']
 const count = layers.indexOf(layer) + 1
 const digest = /^[a-f0-9]{64}$/
 if (!count || !/^[a-f0-9]{40}$/.test(manifest.upstreamCommit) || manifest.patches.length !== layers.length
@@ -142,6 +142,7 @@ case "${1:-}" in
             deps) default_tag=umia-attestor:f6ff0e3-epoch-auth-log-host-deps ;;
             consolidate) default_tag=umia-attestor:f6ff0e3-consolidate ;;
             diagnostics) default_tag=umia-attestor:f6ff0e3-diagnostics ;;
+            hardening) default_tag=umia-attestor:f6ff0e3-hardening ;;
             final) default_tag=umia-attestor:f6ff0e3-final ;;
         esac
         image_tag=${1:-$default_tag}
