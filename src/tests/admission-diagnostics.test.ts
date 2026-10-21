@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { after, describe, it, mock } from 'node:test'
 import { Wallet } from 'ethers'
 
+import { CERTIFICATE_TRUST_REASONS } from '#src/tests/utils/certificate-trust-reasons.ts'
 import { inputContext, signedContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_IDENTITY_PROVIDER, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
 import { SEC_HARDENING_REASONS } from '#src/tests/utils/sec-hardening-reasons.ts'
 
@@ -151,7 +152,7 @@ describe('CLAIM_CHAIN_IDS', () => {
 
 describe('finite rejection reasons', () => {
 	after(() => {
-		const reasons = Object.keys(REJECTION_REASONS).filter(reason => !SEC_HARDENING_REASONS.includes(reason))
+		const reasons = Object.keys(REJECTION_REASONS).filter(reason => !SEC_HARDENING_REASONS.includes(reason) && !CERTIFICATE_TRUST_REASONS.includes(reason))
 		assert.deepEqual([...exercised].sort(), reasons.sort(), 'a reason in the table has no test')
 	})
 

@@ -13,13 +13,12 @@ import {
 	parseServerHello,
 	processServerKeyShare,
 	SUPPORTED_RECORD_TYPE_MAP, uint8ArrayToDataView,
-	verifyCertificateChain,
 	verifyCertificateSignature
 } from '@reclaimprotocol/tls'
 
 import type { ClaimTunnelRequest } from '#src/proto/api.ts'
 import { TranscriptMessageSenderType } from '#src/proto/api.ts'
-import { refuseCertificateFetch } from '#src/server/utils/certificate-fetch.ts'
+import { verifyProviderCertificateChain } from '#src/server/utils/certificate-trust.ts'
 import type { Logger } from '#src/types/index.ts'
 import { decryptDirect } from '#src/utils/index.ts'
 
@@ -235,7 +234,7 @@ export async function processHandshake(receipt: ClaimTunnelRequest['transcript']
 			const parseResult = parseCertificates(content, { version: tlsVersion! })
 			certificates.push(...parseResult.certificates)
 
-			await verifyCertificateChain(certificates, hostname!, logger, refuseCertificateFetch)
+			await verifyProviderCertificateChain(certificates, hostname!, logger)
 			logger.info({ hostname }, 'verified provider certificate chain')
 			certVerified = true
 			break
@@ -278,7 +277,7 @@ export async function processHandshake(receipt: ClaimTunnelRequest['transcript']
 				signatureData: signatureData12,
 				publicKeyType: keyShare.publicKeyType
 			})
-			await verifyCertificateChain(certificates, hostname!, logger, refuseCertificateFetch)
+			await verifyProviderCertificateChain(certificates, hostname!, logger)
 			logger.info({ hostname }, 'verified provider certificate chain')
 			certVerified = true
 			break
