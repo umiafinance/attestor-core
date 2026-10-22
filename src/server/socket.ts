@@ -10,6 +10,7 @@ import { AuthSession, authExpiredError } from '#src/server/utils/auth-session.ts
 import { getApm } from '#src/server/utils/apm.ts'
 import { assertCanonicalHostWhitelist } from '#src/server/utils/host-policy.ts'
 import { getInitialMessagesFromQuery } from '#src/server/utils/generics.ts'
+import { recordRpc, recordTermination, trackTunnels, untrackTunnels } from '#src/server/utils/telemetry.ts'
 import type { AcceptNewConnectionOpts, BGPListener, IAttestorServerSocket, Logger, RPCEvent, RPCHandler } from '#src/types/index.ts'
 import { AttestorError, generateSessionId } from '#src/utils/index.ts'
 import { AttestorSocket } from '#src/utils/socket-base.ts'
@@ -44,6 +45,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
 
 		this.sessionId = sessionId
 		this.bgpListener = bgpListener
+		trackTunnels(this)
 
 		// handle RPC requests
 		this.addEventListener('rpc-request', handleRpcRequest.bind(this))
@@ -61,6 +63,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
 			if(this.isInitialised) return
 			const err = rejection('ERROR_TIMEOUT', 'INIT_TIMEOUT', 'Init not received in time')
 			this.logger.warn({ err }, 'init deadline reached')
+			recordTermination('INIT_TIMEOUT')
 			void this.terminateConnection(err)
 				.catch(terminateErr => this.logger.error({ err: terminateErr }, 'failed to terminate uninitialised socket'))
 		}, INIT_TIMEOUT_MS)
@@ -70,6 +73,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
 	private closeResources() {
 		if(this.connectionState === 'closed') return
 		this.connectionState = 'closed'
+		untrackTunnels(this)
 		clearTimeout(this.initDeadline)
 		this.releaseAuthSlot()
 		this.authSession?.dispose()
@@ -116,6 +120,7 @@ export class AttestorServerSocket extends AttestorSocket implements IAttestorSer
 			data,
 			() => {
 				this.logger.warn('auth expired')
+				recordTermination('AUTH_EXPIRED')
 				void this.terminateConnection(authExpiredError())
 					.catch(err => this.logger.error({ err }, 'failed to terminate expired auth session'))
 			}
@@ -244,10 +249,14 @@ async function handleRpcRequest(
 		// Observe send failures when expiry suppresses a response.
 		await respond(res)
 
-		logger.info({ durationMs: Date.now() - startedAt }, 'handled RPC request')
+		const durationMs = Date.now() - startedAt
+		logger.info({ durationMs }, 'handled RPC request')
+		recordRpc(type, durationMs, 'success')
 		tx?.setOutcome('success')
 	} catch(err) {
-		logger.error({ err, durationMs: Date.now() - startedAt }, 'error in RPC request')
+		const durationMs = Date.now() - startedAt
+		logger.error({ err, durationMs }, 'error in RPC request')
+		recordRpc(type, durationMs, 'failure', err)
 		try {
 			await respond(AttestorError.fromError(err))
 		} catch(sendErr) {

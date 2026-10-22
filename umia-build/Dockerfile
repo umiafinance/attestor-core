@@ -1,4 +1,6 @@
-FROM node:24.13.0@sha256:1de022d8459f896fff2e7b865823699dc7a8d5567507e8b87b14a7442e07f206
+# check=skip=FromPlatformFlagConstDisallowed
+# The ECS task is x86_64; pinning here covers every build path, including the public mirror.
+FROM --platform=linux/amd64 node:24.22.1@sha256:5630d96570d4ca4a8523fda3d169d0114554d0f48293e1ae3db6be7c79b42a17
 
 RUN apt update -y && apt upgrade -y && apt install git -y
 
@@ -38,5 +40,5 @@ USER node
 CMD ["npm", "run", "start"]
 EXPOSE 8001
 
-COPY ./entrypoint.sh /app/entrypoint.sh
+COPY --chmod=0755 ./entrypoint.sh /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]

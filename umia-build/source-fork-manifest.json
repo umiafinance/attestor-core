@@ -71,12 +71,18 @@
       "tests": ["sec-hardening.test.ts", "stwo-proof-compression.test.ts"]
     },
     {
-      "layer": "final",
+      "layer": "trust",
       "file": "certificate-trust.patch",
       "sha256": "30d49cf660b68ca40b74882913249b84374dcea593ef79adebc0f29d57468019",
       "tests": ["certificate-trust.test.ts"]
+    },
+    {
+      "layer": "final",
+      "file": "attestor-telemetry.patch",
+      "sha256": "d4f35807eb40aea44e72094eb1bcfcaba4d9dacd51120738e67974e6680c43ed",
+      "tests": ["attestor-telemetry.test.ts"]
     }
   ],
-  "packageSha256": "4f52767c3b0ebc92996f935be2c1271f5f2dd45a79fa17cf8c6b85d1fbf0f06f",
-  "packageLockSha256": "71620f569196b1c9ca46df83d14c4568bf398c501877ebebb8312c18eea3f3a3"
+  "packageSha256": "cca8875344494faa234980892738091043759020a35906d2f0b5146592ac59e5",
+  "packageLockSha256": "37d8fbfd8161efee72a83d25b6bedc07f430f06be2dea0fb6dca03733105a95f"
 }

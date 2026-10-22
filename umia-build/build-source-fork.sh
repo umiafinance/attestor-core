@@ -11,8 +11,8 @@ manifest_rows=$(node - "$manifest_file" "$layer" <<'NODE'
 const fs = require('node:fs')
 const [file, layer] = process.argv.slice(2)
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
-const layers = ['epoch', 'auth', 'log', 'host', 'deps', 'consolidate', 'diagnostics', 'hardening', 'final']
-const files = ['claim-epoch.patch', 'auth-lifetime.patch', 'log-privacy.patch', 'host-policy.patch', 'dependency-remediation.patch', 'source-consolidation.patch', 'admission-diagnostics.patch', 'sec-hardening.patch', 'certificate-trust.patch']
+const layers = ['epoch', 'auth', 'log', 'host', 'deps', 'consolidate', 'diagnostics', 'hardening', 'trust', 'final']
+const files = ['claim-epoch.patch', 'auth-lifetime.patch', 'log-privacy.patch', 'host-policy.patch', 'dependency-remediation.patch', 'source-consolidation.patch', 'admission-diagnostics.patch', 'sec-hardening.patch', 'certificate-trust.patch', 'attestor-telemetry.patch']
 const count = layers.indexOf(layer) + 1
 const digest = /^[a-f0-9]{64}$/
 if (!count || !/^[a-f0-9]{40}$/.test(manifest.upstreamCommit) || manifest.patches.length !== layers.length
@@ -97,6 +97,8 @@ if (count >= 5) {
 }
 console.log(JSON.stringify(source))
 NODE
+# The image runs as node, so nothing copied in may keep owner-only modes.
+chmod -R u=rwX,go=rX "$build_dir/context"
 
 case "${1:-}" in
     --prepare-only)
@@ -143,6 +145,7 @@ case "${1:-}" in
             consolidate) default_tag=umia-attestor:f6ff0e3-consolidate ;;
             diagnostics) default_tag=umia-attestor:f6ff0e3-diagnostics ;;
             hardening) default_tag=umia-attestor:f6ff0e3-hardening ;;
+            trust) default_tag=umia-attestor:f6ff0e3-trust ;;
             final) default_tag=umia-attestor:f6ff0e3-final ;;
         esac
         image_tag=${1:-$default_tag}
@@ -151,5 +154,9 @@ case "${1:-}" in
             build_args+=(--network "$ATTESTOR_DOCKER_BUILD_NETWORK")
         fi
         docker build ${build_args[@]+"${build_args[@]}"} -f "$script_dir/Dockerfile" -t "$image_tag" "$build_dir/context"
+        [[ "$(docker image inspect "$image_tag" --format '{{.Architecture}}')" == amd64 ]] ||
+            { echo "$image_tag is not amd64; the ECS task is x86_64" >&2; exit 1; }
+        docker run --rm --entrypoint sh "$image_tag" -c 'test -x /app/entrypoint.sh && test -r /app/package.json' ||
+            { echo "$image_tag is not runnable by its node user" >&2; exit 1; }
         ;;
 esac

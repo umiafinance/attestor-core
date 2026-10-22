@@ -1,5 +1,6 @@
 import { getBytes } from 'ethers'
 
+import { boundAuthSessionId } from '#src/server/utils/claim-context-policy.ts'
 import { getAttestorAddress } from '#src/server/utils/generics.ts'
 import type { RPCHandler } from '#src/types/index.ts'
 import { assertValidAuthRequest } from '#src/utils/auth.ts'
@@ -30,9 +31,10 @@ export const init: RPCHandler<'init'> = async(
 
 	if(initRequest.auth?.data) {
 		client.setAuthSession(initRequest.auth.data)
-		// Verified above, so the auth ID (the Umia zkTLS session ID) may correlate this hop's logs.
+		// Verified above. A `umia1:` binding contributes only its session ID, the ID the API logs.
+		const { id } = initRequest.auth.data
 		client.logger = client.logger.child({
-			zktlsSessionId: createVerifiedSessionRef(initRequest.auth.data.id)
+			zktlsSessionId: createVerifiedSessionRef(boundAuthSessionId(id) ?? id)
 		})
 		client.logger.info('auth session established')
 	}

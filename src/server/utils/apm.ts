@@ -6,6 +6,7 @@ import { logger } from '#src/utils/logger.ts'
 
 let apm: Agent | undefined
 let warnedUnsafeConfig = false
+let reportedMissingConfig = false
 const SAFE_APM_ENV_OVERRIDES = {
 	ELASTIC_APM_CAPTURE_BODY: 'off',
 	ELASTIC_APM_CAPTURE_ERROR_LOG_STACK_TRACES: 'messages',
@@ -30,10 +31,15 @@ export function getApm(): Agent | undefined {
 		!getEnvVariable('ELASTIC_APM_SERVER_URL')
 		|| !getEnvVariable('ELASTIC_APM_SECRET_TOKEN')
 	) {
-		logger.info(
-			'ELASTIC_APM_SERVER_URL or ELASTIC_APM_SECRET_TOKEN not found'
-			+ ' in env, APM agent not initialised'
-		)
+		// Every RPC asks for the agent; one line per process is enough.
+		if(!reportedMissingConfig) {
+			logger.info(
+				'ELASTIC_APM_SERVER_URL or ELASTIC_APM_SECRET_TOKEN not found'
+				+ ' in env, APM agent not initialised'
+			)
+			reportedMissingConfig = true
+		}
+
 		return undefined
 	}
 
