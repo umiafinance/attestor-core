@@ -82,10 +82,10 @@ const ERROR_CODES = set(...Object.keys(proto.ErrorCode).filter(code => /^ERROR_/
 const REASONS = set(...Object.keys(REJECTION_REASONS), 'none')
 const RPCS = set(...telemetry.TELEMETRY_RPC_NAMES, 'other')
 const TIERS = set('authenticated', 'pre_auth')
+const OUTCOMES = set('success', 'rejected', 'failure')
 const ALLOWED: Record<string, Record<string, Allowed>> = {
-	'attestor_rpc_requests_total': { rpc: RPCS, outcome: set('success', 'failure'), 'error_code': ERROR_CODES, reason: REASONS },
-	'attestor_rpc_duration_seconds': { rpc: RPCS, outcome: set('success', 'failure') },
-	'attestor_claims_total': { outcome: set('signed', 'rejected', 'failed'), reason: REASONS, 'chain_id': set('10143', 'unknown') },
+	'attestor_rpc_requests_total': { rpc: RPCS, outcome: OUTCOMES, 'error_code': ERROR_CODES, reason: REASONS },
+	'attestor_rpc_duration_seconds': { rpc: RPCS, outcome: OUTCOMES },
 	'attestor_sockets_active': { tier: TIERS },
 	'attestor_socket_closes_total': { tier: TIERS, 'close_code': set(...Object.values(telemetry.TELEMETRY_CLOSE_CODES), 'other') },
 	'attestor_connection_terminations_total': { reason: set('INIT_TIMEOUT', 'AUTH_EXPIRED') },
@@ -241,7 +241,6 @@ describe('attestor telemetry', () => {
 			assert.equal(delta('attestor_rpc_requests_total', { rpc: 'createTunnel', outcome: 'failure', 'error_code': 'ERROR_BAD_REQUEST', reason: 'HOST_NOT_ALLOWED' }), 1)
 			assert.equal(delta('attestor_rpc_requests_total', { rpc: 'claimTunnel', outcome: 'failure', 'error_code': 'ERROR_NOT_FOUND', reason: 'TUNNEL_NOT_FOUND' }), 1)
 			assert.equal(delta('attestor_rpc_duration_seconds', { rpc: 'init' }), 3)
-			assert.equal(delta('attestor_claims_total', { outcome: 'failed', reason: 'TUNNEL_NOT_FOUND', 'chain_id': 'unknown' }), 1)
 			assert.equal(delta('attestor_connection_terminations_total', { reason: 'INIT_TIMEOUT' }), 1)
 			assert.equal(delta('attestor_connection_terminations_total', { reason: 'AUTH_EXPIRED' }), 1)
 			assert.equal(delta('attestor_socket_closes_total', { tier: 'pre_auth' }), 2)
@@ -261,28 +260,27 @@ describe('attestor telemetry', () => {
 		}
 	})
 
-	it('counts exactly one result per claimTunnel call', async() => {
-		const claims = async() => total(await collect(), 'attestor_claims_total')
-		const cases: [string, () => Promise<unknown>, Record<string, string>][] = [
-			['signed', () => claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext()), { outcome: 'signed', reason: 'none', 'chain_id': '10143' }],
-			['rejected', async() => {
-				rejectClaim = true
-				try {
-					const res = await claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext())
-					assert.equal(res.error?.code, proto.ErrorCode.ERROR_INVALID_CLAIM)
-				} finally {
-					rejectClaim = false
-				}
-			}, { outcome: 'rejected', reason: 'TRANSCRIPT_DECRYPT_FAILED', 'chain_id': '10143' }],
-			['failed', () => assert.rejects(claimTunnel(claimRequest('{"contextAddress":"0x1"}'), handlerContext())), { outcome: 'failed', reason: 'CLAIM_CONTEXT_INVALID', 'chain_id': 'unknown' }]
+	it('classifies claimTunnel results where the RPC is handled: signed, signed rejection, thrown', async() => {
+		const signed = await claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext())
+		rejectClaim = true
+		const rejected = await claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext()).finally(() => {
+			rejectClaim = false
+		})
+		assert.equal(rejected.error?.code, proto.ErrorCode.ERROR_INVALID_CLAIM)
+		const thrown = await claimTunnel(claimRequest('{"contextAddress":"0x1"}'), handlerContext()).then(
+			() => assert.fail('an unsupported context must throw'),
+			(err: unknown) => err
+		)
+		const cases: [string, Parameters<typeof telemetry.recordRpc>[2], Record<string, string>][] = [
+			['signed', { response: signed }, { outcome: 'success', 'error_code': 'none', reason: 'none' }],
+			['rejected', { response: rejected }, { outcome: 'rejected', 'error_code': 'ERROR_INVALID_CLAIM', reason: 'TRANSCRIPT_DECRYPT_FAILED' }],
+			['thrown', { error: thrown }, { outcome: 'failure', 'error_code': 'ERROR_BAD_REQUEST', reason: 'CLAIM_CONTEXT_INVALID' }]
 		]
-		for(const [name, run, match] of cases) {
-			const before = await collect()
-			const count = await claims()
-			await run()
-			const after = await collect()
-			assert.equal(await claims() - count, 1, name)
-			assert.equal(total(after, 'attestor_claims_total', match) - total(before, 'attestor_claims_total', match), 1, name)
+		for(const [name, result, match] of cases) {
+			const count = async() => total(await collect(), 'attestor_rpc_requests_total', { rpc: 'claimTunnel', ...match })
+			const before = await count()
+			telemetry.recordRpc('claimTunnel', 3, result)
+			assert.equal(await count() - before, 1, name)
 		}
 
 		assertFinite(await collect())
@@ -341,7 +339,7 @@ describe('OTLP export', () => {
 		assert.equal(telemetry.startTelemetry({
 			env: { OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: `http://127.0.0.1:${port}/v1/metrics`, OTEL_METRIC_EXPORT_INTERVAL: '200' }
 		}), true)
-		telemetry.recordRpc('init', 12, 'success')
+		telemetry.recordRpc('init', 12, { response: {} })
 		await until(() => requests.some(request => request.body.includes('attestor_rpc_requests_total')), 5_000)
 		const request = requests.find(item => item.body.includes('attestor_rpc_requests_total'))!
 		assert.equal(request.url, '/v1/metrics')

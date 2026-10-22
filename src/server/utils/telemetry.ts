@@ -11,6 +11,7 @@ import type { WebSocket } from 'ws'
 import { CLAIM_CHAIN_IDS } from '#src/config/claim-chain-ids.ts'
 import { CLAIM_EPOCH } from '#src/config/claim-epoch.ts'
 import { getAttestorAddress } from '#src/server/utils/generics.ts'
+import { AttestorError } from '#src/utils/error.ts'
 import { safeErrorCode } from '#src/utils/logger.ts'
 import { rejectionReason } from '#src/utils/rejection-reason.ts'
 import { SelectedServiceSignatureType } from '#src/utils/signatures/index.ts'
@@ -22,8 +23,9 @@ export const TELEMETRY_RPC_NAMES = [
 ] as const
 
 export type SocketTier = 'authenticated' | 'pre_auth'
-export type ClaimOutcome = 'signed' | 'rejected' | 'failed'
 export type TerminationReason = 'INIT_TIMEOUT' | 'AUTH_EXPIRED'
+/** A handled RPC's response, or what it threw. */
+export type RpcResult = { response: unknown } | { error: unknown }
 
 export const TELEMETRY_CLOSE_CODES: Readonly<Record<number, string>> = {
 	1000: 'normal', 1001: 'going_away', 1002: 'protocol_error', 1003: 'unsupported_data',
@@ -42,7 +44,6 @@ type Instruments = {
 	provider: MeterProvider
 	rpcRequests: Counter
 	rpcDuration: Histogram
-	claims: Counter
 	socketCloses: Counter
 	terminations: Counter
 	messageBytes: Histogram
@@ -84,68 +85,46 @@ export async function stopTelemetry() {
 	const current = instruments
 	instruments = undefined
 	if(!current) return
-	try {
-		current.eventLoopDelay.disable()
-		await current.provider.shutdown()
-	} catch {
-		// Telemetry must not change the result of an attestor operation.
-	}
+	current.eventLoopDelay.disable()
+	await current.provider.shutdown().catch(() => {})
 }
 
-export function recordRpc(type: unknown, durationMs: number, outcome: 'success' | 'failure', err?: unknown) {
-	const current = instruments
-	if(!current) return
-	try {
+/**
+ * Counts one handled RPC. A response that carries a signed error instead of a result, such as
+ * a claimTunnel rejection, is `rejected`; a thrown error is `failure`.
+ */
+export function recordRpc(type: unknown, durationMs: number, result: RpcResult) {
+	record(({ rpcRequests, rpcDuration }) => {
+		const error = 'error' in result ? result.error : signedError(result.response)
+		const outcome = 'error' in result ? 'failure' : error ? 'rejected' : 'success'
 		const rpc = rpcName(type)
-		current.rpcRequests.add(1, {
+		rpcRequests.add(1, {
 			rpc,
 			outcome,
-			error_code: outcome === 'failure' ? safeErrorCode(err) : 'none',
-			reason: outcome === 'failure' ? rejectionReason(err) ?? 'none' : 'none'
+			error_code: error ? safeErrorCode(error) : 'none',
+			reason: error ? rejectionReason(error) ?? 'none' : 'none'
 		})
-		current.rpcDuration.record(Math.max(0, durationMs) / 1000, { rpc, outcome })
-	} catch {
-		// Telemetry must not change the result of an attestor operation.
-	}
-}
-
-/** `rejection` is the error behind a signed rejection, or the error a failed claim threw. */
-export function recordClaim(outcome: ClaimOutcome, rejection: unknown, chainId: unknown) {
-	const current = instruments
-	if(!current) return
-	try {
-		current.claims.add(1, {
-			outcome,
-			reason: outcome === 'signed' ? 'none' : rejectionReason(rejection) ?? 'none',
-			chain_id: typeof chainId === 'string' && CLAIM_CHAIN_IDS.includes(chainId) ? chainId : 'unknown'
-		})
-	} catch {
-		// Telemetry must not change the result of an attestor operation.
-	}
+		rpcDuration.record(Math.max(0, durationMs) / 1000, { rpc, outcome })
+	})
 }
 
 export function recordTermination(reason: TerminationReason) {
-	const current = instruments
-	if(!current) return
-	try {
-		current.terminations.add(1, { reason })
-	} catch {
-		// Telemetry must not change the result of an attestor operation.
-	}
+	record(({ terminations }) => terminations.add(1, { reason }))
 }
 
 /** Counts the socket in its admission tier until it closes, with its inbound message sizes. */
 export function observeSocket(ws: WebSocket, tier: SocketTier) {
-	try {
+	safely(() => {
 		openSockets[tier] += 1
-		ws.on('message', data => recordMessageBytes(tier, data))
+		ws.on('message', data => record(({ messageBytes }) => {
+			const bytes = byteLength(data)
+			if(bytes !== undefined) messageBytes.record(bytes, { tier })
+		}))
 		ws.once('close', code => {
 			openSockets[tier] = Math.max(0, openSockets[tier] - 1)
-			recordSocketClose(tier, code)
+			record(({ socketCloses }) => socketCloses.add(1, { tier, close_code: closeCodeName(code) }))
 		})
-	} catch {
-		// Telemetry must not change the result of an attestor operation.
-	}
+	})
 }
 
 export function trackTunnels(source: { tunnels: object }) {
@@ -193,37 +172,33 @@ function createInstruments(provider: MeterProvider): Instruments {
 		socketsActive, tunnelsActive, residentMemory, heapUsed, heapTotal, externalMemory,
 		arrayBuffers, eventLoopDelaySeconds, eventLoopUtilization, build
 	]
-	meter.addBatchObservableCallback(result => {
-		try {
-			result.observe(socketsActive, openSockets.authenticated, { tier: 'authenticated' })
-			result.observe(socketsActive, openSockets.pre_auth, { tier: 'pre_auth' })
-			let tunnels = 0
-			for(const source of tunnelSources) tunnels += Object.keys(source.tunnels).length
-			result.observe(tunnelsActive, tunnels)
-			const memory = process.memoryUsage()
-			result.observe(residentMemory, memory.rss)
-			result.observe(heapUsed, memory.heapUsed)
-			result.observe(heapTotal, memory.heapTotal)
-			result.observe(externalMemory, memory.external)
-			result.observe(arrayBuffers, memory.arrayBuffers)
-			const usage = process.cpuUsage()
-			result.observe(cpu, usage.user / 1e6, { mode: 'user' })
-			result.observe(cpu, usage.system / 1e6, { mode: 'system' })
-			if(eventLoopDelay.count > 0) {
-				result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(50) / 1e9, { percentile: 'p50' })
-				result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(99) / 1e9, { percentile: 'p99' })
-				result.observe(eventLoopDelaySeconds, eventLoopDelay.max / 1e9, { percentile: 'max' })
-			}
-
-			eventLoopDelay.reset()
-			const utilization = performance.eventLoopUtilization()
-			result.observe(eventLoopUtilization, performance.eventLoopUtilization(utilization, lastUtilization).utilization)
-			lastUtilization = utilization
-			result.observe(build, 1, getBuildInfo())
-		} catch {
-			// Telemetry must not change the result of an attestor operation.
+	meter.addBatchObservableCallback(result => safely(() => {
+		result.observe(socketsActive, openSockets.authenticated, { tier: 'authenticated' })
+		result.observe(socketsActive, openSockets.pre_auth, { tier: 'pre_auth' })
+		let tunnels = 0
+		for(const source of tunnelSources) tunnels += Object.keys(source.tunnels).length
+		result.observe(tunnelsActive, tunnels)
+		const memory = process.memoryUsage()
+		result.observe(residentMemory, memory.rss)
+		result.observe(heapUsed, memory.heapUsed)
+		result.observe(heapTotal, memory.heapTotal)
+		result.observe(externalMemory, memory.external)
+		result.observe(arrayBuffers, memory.arrayBuffers)
+		const usage = process.cpuUsage()
+		result.observe(cpu, usage.user / 1e6, { mode: 'user' })
+		result.observe(cpu, usage.system / 1e6, { mode: 'system' })
+		if(eventLoopDelay.count > 0) {
+			result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(50) / 1e9, { percentile: 'p50' })
+			result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(99) / 1e9, { percentile: 'p99' })
+			result.observe(eventLoopDelaySeconds, eventLoopDelay.max / 1e9, { percentile: 'max' })
 		}
-	}, [...observed, cpu])
+
+		eventLoopDelay.reset()
+		const utilization = performance.eventLoopUtilization()
+		result.observe(eventLoopUtilization, performance.eventLoopUtilization(utilization, lastUtilization).utilization)
+		lastUtilization = utilization
+		result.observe(build, 1, getBuildInfo())
+	}), [...observed, cpu])
 
 	return {
 		provider,
@@ -234,9 +209,6 @@ function createInstruments(provider: MeterProvider): Instruments {
 			description: 'RPC handling time by RPC and outcome',
 			unit: 's',
 			advice: { explicitBucketBoundaries: DURATION_BUCKETS_S }
-		}),
-		claims: meter.createCounter('attestor_claims_total', {
-			description: 'claimTunnel results: signed claims, signed rejections and failures'
 		}),
 		socketCloses: meter.createCounter('attestor_socket_closes_total', {
 			description: 'Closed WebSocket connections by admission tier and close code'
@@ -253,26 +225,28 @@ function createInstruments(provider: MeterProvider): Instruments {
 	}
 }
 
-function recordMessageBytes(tier: SocketTier, data: unknown) {
+/** Runs `fn` while metrics are recorded. */
+function record(fn: (current: Instruments) => void) {
 	const current = instruments
-	if(!current) return
+	if(current) safely(() => fn(current))
+}
+
+function safely(fn: () => void) {
 	try {
-		const bytes = byteLength(data)
-		if(bytes !== undefined) current.messageBytes.record(bytes, { tier })
+		fn()
 	} catch {
 		// Telemetry must not change the result of an attestor operation.
 	}
 }
 
-function recordSocketClose(tier: SocketTier, code: unknown) {
-	const current = instruments
-	if(!current) return
-	try {
-		const closeCode = typeof code === 'number' && Object.hasOwn(TELEMETRY_CLOSE_CODES, code) ? TELEMETRY_CLOSE_CODES[code] : 'other'
-		current.socketCloses.add(1, { tier, close_code: closeCode })
-	} catch {
-		// Telemetry must not change the result of an attestor operation.
-	}
+/** The signed error a handled RPC returned in place of its result. */
+function signedError(response: unknown) {
+	const error = (response as { error?: Parameters<typeof AttestorError.fromProto>[0] } | undefined)?.error
+	return error ? AttestorError.fromProto(error) : undefined
+}
+
+function closeCodeName(code: unknown) {
+	return typeof code === 'number' && Object.hasOwn(TELEMETRY_CLOSE_CODES, code) ? TELEMETRY_CLOSE_CODES[code] : 'other'
 }
 
 function rpcName(type: unknown): string {

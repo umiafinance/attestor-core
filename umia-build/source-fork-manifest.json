@@ -50,7 +50,9 @@
         "dependency-ip-safety.test.ts",
         "dependency-tunnel-routing.test.ts",
         "dependency-unauthenticated-tunnel.test.ts"
-      ]
+      ],
+      "packageSha256": "9a453100fcce5158b28ed2572e731c9a7ae5222becf0092a7897e31f4b55a4a5",
+      "packageLockSha256": "574070295059ad65ce37f3e4287d9bd99c8dd9a4dc01bc6d8721792031add4ca"
     },
     {
       "layer": "consolidate",
@@ -68,21 +70,25 @@
       "layer": "hardening",
       "file": "sec-hardening.patch",
       "sha256": "0d5eba781b91f1c98619ddc113874dc079c484b5b904411c6b0384105d8e171f",
-      "tests": ["sec-hardening.test.ts", "stwo-proof-compression.test.ts"]
+      "tests": ["sec-hardening.test.ts", "stwo-proof-compression.test.ts"],
+      "packageSha256": "ec869ed2a716a865097a0e2e9c391f179caec3c9e74d300133c5630f6834c8aa",
+      "packageLockSha256": "aaf7636ce4989bee1958a9a6afc955f75f8e9aea62f7637c31bdcdd76968ef64"
     },
     {
       "layer": "trust",
       "file": "certificate-trust.patch",
       "sha256": "30d49cf660b68ca40b74882913249b84374dcea593ef79adebc0f29d57468019",
-      "tests": ["certificate-trust.test.ts"]
+      "tests": ["certificate-trust.test.ts"],
+      "packageSha256": "4f52767c3b0ebc92996f935be2c1271f5f2dd45a79fa17cf8c6b85d1fbf0f06f",
+      "packageLockSha256": "71620f569196b1c9ca46df83d14c4568bf398c501877ebebb8312c18eea3f3a3"
     },
     {
       "layer": "final",
       "file": "attestor-telemetry.patch",
-      "sha256": "d4f35807eb40aea44e72094eb1bcfcaba4d9dacd51120738e67974e6680c43ed",
-      "tests": ["attestor-telemetry.test.ts"]
+      "sha256": "408cf3ca7914d674537d44c1d6af7aa1703b05ace3880a7800d260ffc713b66e",
+      "tests": ["attestor-telemetry.test.ts"],
+      "packageSha256": "cca8875344494faa234980892738091043759020a35906d2f0b5146592ac59e5",
+      "packageLockSha256": "37d8fbfd8161efee72a83d25b6bedc07f430f06be2dea0fb6dca03733105a95f"
     }
-  ],
-  "packageSha256": "cca8875344494faa234980892738091043759020a35906d2f0b5146592ac59e5",
-  "packageLockSha256": "37d8fbfd8161efee72a83d25b6bedc07f430f06be2dea0fb6dca03733105a95f"
+  ]
 }

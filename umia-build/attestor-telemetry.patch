@@ -196,65 +196,6 @@ index 0138248..a02650f 100644
  		wss.emit('connection', ws, request)
  	})
  }
-diff --git a/src/server/handlers/claimTunnel.ts b/src/server/handlers/claimTunnel.ts
-index 21fcd3a..ed66a30 100644
---- a/src/server/handlers/claimTunnel.ts
-+++ b/src/server/handlers/claimTunnel.ts
-@@ -5,6 +5,7 @@ import { ClaimTunnelResponse } from '#src/proto/api.ts'
- import { getApm } from '#src/server/utils/apm.ts'
- import { assertTranscriptsMatch, assertValidClaimRequest } from '#src/server/utils/assert-valid-claim-request.ts'
- import { signClaimResponse } from '#src/server/utils/sign-claim-response.ts'
-+import { recordClaim } from '#src/server/utils/telemetry.ts'
- import { assertAuthenticatedClaimAuthority } from '#src/server/utils/host-policy.ts'
- import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
- import type { RPCHandler } from '#src/types/index.ts'
-@@ -15,10 +16,26 @@ import {
- } from '#src/utils/index.ts'
- import { rejection, withRejectionReason } from '#src/utils/rejection-reason.ts'
- 
--export const claimTunnel: RPCHandler<'claimTunnel'> = async(
--	claimRequest,
--	{ tx, logger, client }
--) => {
-+type ClaimObservation = { chainId?: string, rejection?: AttestorError }
-+
-+// One result per call: a signed claim, a signed rejection, or a thrown failure.
-+export const claimTunnel: RPCHandler<'claimTunnel'> = async(claimRequest, ctx) => {
-+	const observation: ClaimObservation = {}
-+	try {
-+		const res = await processClaimTunnel(claimRequest, ctx, observation)
-+		recordClaim(observation.rejection ? 'rejected' : 'signed', observation.rejection, observation.chainId)
-+		return res
-+	} catch(err) {
-+		recordClaim('failed', err, observation.chainId)
-+		throw err
-+	}
-+}
-+
-+async function processClaimTunnel(
-+	claimRequest: Parameters<RPCHandler<'claimTunnel'>>[0],
-+	{ tx, logger, client }: Parameters<RPCHandler<'claimTunnel'>>[1],
-+	observation: ClaimObservation
-+) {
- 	const {
- 		request,
- 		data: { timestampS } = {},
-@@ -61,6 +78,7 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
- 	let inputContext: ReturnType<typeof assertSupportedInputContext>
- 	try {
- 		inputContext = assertSupportedInputContext(claimRequest.data?.context, client.authIdentity, CLAIM_CHAIN_IDS)
-+		observation.chainId = inputContext.chainId
- 	} catch(err) {
- 		client.removeTunnel(request.id)
- 		throw err
-@@ -100,6 +118,7 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
- 	} catch(err) {
- 		logger.error({ err }, 'invalid claim request')
- 		const attestorErr = AttestorError.fromError(err, 'ERROR_INVALID_CLAIM')
-+		observation.rejection = attestorErr
- 		res.error = attestorErr.toProto()
- 	}
- 
 diff --git a/src/server/handlers/init.ts b/src/server/handlers/init.ts
 index bc3727b..cb79b95 100644
 --- a/src/server/handlers/init.ts
@@ -280,7 +221,7 @@ index bc3727b..cb79b95 100644
  		client.logger.info('auth session established')
  	}
 diff --git a/src/server/socket.ts b/src/server/socket.ts
-index cdad96b..bf3fa26 100644
+index cdad96b..754ade9 100644
 --- a/src/server/socket.ts
 +++ b/src/server/socket.ts
 @@ -10,6 +10,7 @@ import { AuthSession, authExpiredError } from '#src/server/utils/auth-session.ts
@@ -330,13 +271,13 @@ index cdad96b..bf3fa26 100644
 -		logger.info({ durationMs: Date.now() - startedAt }, 'handled RPC request')
 +		const durationMs = Date.now() - startedAt
 +		logger.info({ durationMs }, 'handled RPC request')
-+		recordRpc(type, durationMs, 'success')
++		recordRpc(type, durationMs, { response: res })
  		tx?.setOutcome('success')
  	} catch(err) {
 -		logger.error({ err, durationMs: Date.now() - startedAt }, 'error in RPC request')
 +		const durationMs = Date.now() - startedAt
 +		logger.error({ err, durationMs }, 'error in RPC request')
-+		recordRpc(type, durationMs, 'failure', err)
++		recordRpc(type, durationMs, { error: err })
  		try {
  			await respond(AttestorError.fromError(err))
  		} catch(sendErr) {
@@ -373,18 +314,10 @@ index cd83821..928170e 100644
  	}
  
 diff --git a/src/server/utils/claim-context-policy.ts b/src/server/utils/claim-context-policy.ts
-index 4eadc61..f989cc7 100644
+index 4eadc61..d6d181e 100644
 --- a/src/server/utils/claim-context-policy.ts
 +++ b/src/server/utils/claim-context-policy.ts
-@@ -22,6 +22,7 @@ type InputContext = {
- 	identityProvider: string
- 	reclaimSessionId: string
- 	allowedHashes: readonly string[]
-+	chainId: string
- }
- 
- function boundAuthIdentity(value: string | undefined): {
-@@ -38,6 +39,11 @@ function boundAuthIdentity(value: string | undefined): {
+@@ -38,6 +38,11 @@ function boundAuthIdentity(value: string | undefined): {
  	return { sessionId: parts[1], identityProvider: parts[2], allowedHashes: hashes, scopeDigest: parts[4] }
  }
  
@@ -396,22 +329,12 @@ index 4eadc61..f989cc7 100644
  // The runner adapter matches this exact message; the reason carries the finite detail.
  function invalid(reason: RejectionReason): never {
  	throw AttestorError.badRequest('Unsupported claim context', { reason })
-@@ -104,7 +110,8 @@ export function assertSupportedInputContext(
- 		contextMessage: input.contextMessage as string,
- 		identityProvider: input.identityProvider,
- 		reclaimSessionId: binding.sessionId,
--		allowedHashes: binding.allowedHashes
-+		allowedHashes: binding.allowedHashes,
-+		chainId: form.chainId
- 	}
- }
- 
 diff --git a/src/server/utils/telemetry.ts b/src/server/utils/telemetry.ts
 new file mode 100644
-index 0000000..1205e84
+index 0000000..aada932
 --- /dev/null
 +++ b/src/server/utils/telemetry.ts
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,293 @@
 +import { createHash, randomUUID } from 'node:crypto'
 +import { readFileSync } from 'node:fs'
 +import { type EventLoopUtilization, monitorEventLoopDelay, performance } from 'node:perf_hooks'
@@ -425,6 +348,7 @@ index 0000000..1205e84
 +import { CLAIM_CHAIN_IDS } from '#src/config/claim-chain-ids.ts'
 +import { CLAIM_EPOCH } from '#src/config/claim-epoch.ts'
 +import { getAttestorAddress } from '#src/server/utils/generics.ts'
++import { AttestorError } from '#src/utils/error.ts'
 +import { safeErrorCode } from '#src/utils/logger.ts'
 +import { rejectionReason } from '#src/utils/rejection-reason.ts'
 +import { SelectedServiceSignatureType } from '#src/utils/signatures/index.ts'
@@ -436,8 +360,9 @@ index 0000000..1205e84
 +] as const
 +
 +export type SocketTier = 'authenticated' | 'pre_auth'
-+export type ClaimOutcome = 'signed' | 'rejected' | 'failed'
 +export type TerminationReason = 'INIT_TIMEOUT' | 'AUTH_EXPIRED'
++/** A handled RPC's response, or what it threw. */
++export type RpcResult = { response: unknown } | { error: unknown }
 +
 +export const TELEMETRY_CLOSE_CODES: Readonly<Record<number, string>> = {
 +	1000: 'normal', 1001: 'going_away', 1002: 'protocol_error', 1003: 'unsupported_data',
@@ -456,7 +381,6 @@ index 0000000..1205e84
 +	provider: MeterProvider
 +	rpcRequests: Counter
 +	rpcDuration: Histogram
-+	claims: Counter
 +	socketCloses: Counter
 +	terminations: Counter
 +	messageBytes: Histogram
@@ -498,68 +422,46 @@ index 0000000..1205e84
 +	const current = instruments
 +	instruments = undefined
 +	if(!current) return
-+	try {
-+		current.eventLoopDelay.disable()
-+		await current.provider.shutdown()
-+	} catch {
-+		// Telemetry must not change the result of an attestor operation.
-+	}
++	current.eventLoopDelay.disable()
++	await current.provider.shutdown().catch(() => {})
 +}
 +
-+export function recordRpc(type: unknown, durationMs: number, outcome: 'success' | 'failure', err?: unknown) {
-+	const current = instruments
-+	if(!current) return
-+	try {
++/**
++ * Counts one handled RPC. A response that carries a signed error instead of a result, such as
++ * a claimTunnel rejection, is `rejected`; a thrown error is `failure`.
++ */
++export function recordRpc(type: unknown, durationMs: number, result: RpcResult) {
++	record(({ rpcRequests, rpcDuration }) => {
++		const error = 'error' in result ? result.error : signedError(result.response)
++		const outcome = 'error' in result ? 'failure' : error ? 'rejected' : 'success'
 +		const rpc = rpcName(type)
-+		current.rpcRequests.add(1, {
++		rpcRequests.add(1, {
 +			rpc,
 +			outcome,
-+			error_code: outcome === 'failure' ? safeErrorCode(err) : 'none',
-+			reason: outcome === 'failure' ? rejectionReason(err) ?? 'none' : 'none'
++			error_code: error ? safeErrorCode(error) : 'none',
++			reason: error ? rejectionReason(error) ?? 'none' : 'none'
 +		})
-+		current.rpcDuration.record(Math.max(0, durationMs) / 1000, { rpc, outcome })
-+	} catch {
-+		// Telemetry must not change the result of an attestor operation.
-+	}
-+}
-+
-+/** `rejection` is the error behind a signed rejection, or the error a failed claim threw. */
-+export function recordClaim(outcome: ClaimOutcome, rejection: unknown, chainId: unknown) {
-+	const current = instruments
-+	if(!current) return
-+	try {
-+		current.claims.add(1, {
-+			outcome,
-+			reason: outcome === 'signed' ? 'none' : rejectionReason(rejection) ?? 'none',
-+			chain_id: typeof chainId === 'string' && CLAIM_CHAIN_IDS.includes(chainId) ? chainId : 'unknown'
-+		})
-+	} catch {
-+		// Telemetry must not change the result of an attestor operation.
-+	}
++		rpcDuration.record(Math.max(0, durationMs) / 1000, { rpc, outcome })
++	})
 +}
 +
 +export function recordTermination(reason: TerminationReason) {
-+	const current = instruments
-+	if(!current) return
-+	try {
-+		current.terminations.add(1, { reason })
-+	} catch {
-+		// Telemetry must not change the result of an attestor operation.
-+	}
++	record(({ terminations }) => terminations.add(1, { reason }))
 +}
 +
 +/** Counts the socket in its admission tier until it closes, with its inbound message sizes. */
 +export function observeSocket(ws: WebSocket, tier: SocketTier) {
-+	try {
++	safely(() => {
 +		openSockets[tier] += 1
-+		ws.on('message', data => recordMessageBytes(tier, data))
++		ws.on('message', data => record(({ messageBytes }) => {
++			const bytes = byteLength(data)
++			if(bytes !== undefined) messageBytes.record(bytes, { tier })
++		}))
 +		ws.once('close', code => {
 +			openSockets[tier] = Math.max(0, openSockets[tier] - 1)
-+			recordSocketClose(tier, code)
++			record(({ socketCloses }) => socketCloses.add(1, { tier, close_code: closeCodeName(code) }))
 +		})
-+	} catch {
-+		// Telemetry must not change the result of an attestor operation.
-+	}
++	})
 +}
 +
 +export function trackTunnels(source: { tunnels: object }) {
@@ -607,37 +509,33 @@ index 0000000..1205e84
 +		socketsActive, tunnelsActive, residentMemory, heapUsed, heapTotal, externalMemory,
 +		arrayBuffers, eventLoopDelaySeconds, eventLoopUtilization, build
 +	]
-+	meter.addBatchObservableCallback(result => {
-+		try {
-+			result.observe(socketsActive, openSockets.authenticated, { tier: 'authenticated' })
-+			result.observe(socketsActive, openSockets.pre_auth, { tier: 'pre_auth' })
-+			let tunnels = 0
-+			for(const source of tunnelSources) tunnels += Object.keys(source.tunnels).length
-+			result.observe(tunnelsActive, tunnels)
-+			const memory = process.memoryUsage()
-+			result.observe(residentMemory, memory.rss)
-+			result.observe(heapUsed, memory.heapUsed)
-+			result.observe(heapTotal, memory.heapTotal)
-+			result.observe(externalMemory, memory.external)
-+			result.observe(arrayBuffers, memory.arrayBuffers)
-+			const usage = process.cpuUsage()
-+			result.observe(cpu, usage.user / 1e6, { mode: 'user' })
-+			result.observe(cpu, usage.system / 1e6, { mode: 'system' })
-+			if(eventLoopDelay.count > 0) {
-+				result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(50) / 1e9, { percentile: 'p50' })
-+				result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(99) / 1e9, { percentile: 'p99' })
-+				result.observe(eventLoopDelaySeconds, eventLoopDelay.max / 1e9, { percentile: 'max' })
-+			}
-+
-+			eventLoopDelay.reset()
-+			const utilization = performance.eventLoopUtilization()
-+			result.observe(eventLoopUtilization, performance.eventLoopUtilization(utilization, lastUtilization).utilization)
-+			lastUtilization = utilization
-+			result.observe(build, 1, getBuildInfo())
-+		} catch {
-+			// Telemetry must not change the result of an attestor operation.
++	meter.addBatchObservableCallback(result => safely(() => {
++		result.observe(socketsActive, openSockets.authenticated, { tier: 'authenticated' })
++		result.observe(socketsActive, openSockets.pre_auth, { tier: 'pre_auth' })
++		let tunnels = 0
++		for(const source of tunnelSources) tunnels += Object.keys(source.tunnels).length
++		result.observe(tunnelsActive, tunnels)
++		const memory = process.memoryUsage()
++		result.observe(residentMemory, memory.rss)
++		result.observe(heapUsed, memory.heapUsed)
++		result.observe(heapTotal, memory.heapTotal)
++		result.observe(externalMemory, memory.external)
++		result.observe(arrayBuffers, memory.arrayBuffers)
++		const usage = process.cpuUsage()
++		result.observe(cpu, usage.user / 1e6, { mode: 'user' })
++		result.observe(cpu, usage.system / 1e6, { mode: 'system' })
++		if(eventLoopDelay.count > 0) {
++			result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(50) / 1e9, { percentile: 'p50' })
++			result.observe(eventLoopDelaySeconds, eventLoopDelay.percentile(99) / 1e9, { percentile: 'p99' })
++			result.observe(eventLoopDelaySeconds, eventLoopDelay.max / 1e9, { percentile: 'max' })
 +		}
-+	}, [...observed, cpu])
++
++		eventLoopDelay.reset()
++		const utilization = performance.eventLoopUtilization()
++		result.observe(eventLoopUtilization, performance.eventLoopUtilization(utilization, lastUtilization).utilization)
++		lastUtilization = utilization
++		result.observe(build, 1, getBuildInfo())
++	}), [...observed, cpu])
 +
 +	return {
 +		provider,
@@ -648,9 +546,6 @@ index 0000000..1205e84
 +			description: 'RPC handling time by RPC and outcome',
 +			unit: 's',
 +			advice: { explicitBucketBoundaries: DURATION_BUCKETS_S }
-+		}),
-+		claims: meter.createCounter('attestor_claims_total', {
-+			description: 'claimTunnel results: signed claims, signed rejections and failures'
 +		}),
 +		socketCloses: meter.createCounter('attestor_socket_closes_total', {
 +			description: 'Closed WebSocket connections by admission tier and close code'
@@ -667,26 +562,28 @@ index 0000000..1205e84
 +	}
 +}
 +
-+function recordMessageBytes(tier: SocketTier, data: unknown) {
++/** Runs `fn` while metrics are recorded. */
++function record(fn: (current: Instruments) => void) {
 +	const current = instruments
-+	if(!current) return
++	if(current) safely(() => fn(current))
++}
++
++function safely(fn: () => void) {
 +	try {
-+		const bytes = byteLength(data)
-+		if(bytes !== undefined) current.messageBytes.record(bytes, { tier })
++		fn()
 +	} catch {
 +		// Telemetry must not change the result of an attestor operation.
 +	}
 +}
 +
-+function recordSocketClose(tier: SocketTier, code: unknown) {
-+	const current = instruments
-+	if(!current) return
-+	try {
-+		const closeCode = typeof code === 'number' && Object.hasOwn(TELEMETRY_CLOSE_CODES, code) ? TELEMETRY_CLOSE_CODES[code] : 'other'
-+		current.socketCloses.add(1, { tier, close_code: closeCode })
-+	} catch {
-+		// Telemetry must not change the result of an attestor operation.
-+	}
++/** The signed error a handled RPC returned in place of its result. */
++function signedError(response: unknown) {
++	const error = (response as { error?: Parameters<typeof AttestorError.fromProto>[0] } | undefined)?.error
++	return error ? AttestorError.fromProto(error) : undefined
++}
++
++function closeCodeName(code: unknown) {
++	return typeof code === 'number' && Object.hasOwn(TELEMETRY_CLOSE_CODES, code) ? TELEMETRY_CLOSE_CODES[code] : 'other'
 +}
 +
 +function rpcName(type: unknown): string {
@@ -733,10 +630,10 @@ index 0000000..1205e84
 +}
 diff --git a/src/tests/attestor-telemetry.test.ts b/src/tests/attestor-telemetry.test.ts
 new file mode 100644
-index 0000000..7f2e9de
+index 0000000..81c029d
 --- /dev/null
 +++ b/src/tests/attestor-telemetry.test.ts
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,355 @@
 +import assert from 'node:assert/strict'
 +import { createHash, randomUUID } from 'node:crypto'
 +import { readFileSync } from 'node:fs'
@@ -821,10 +718,10 @@ index 0000000..7f2e9de
 +const REASONS = set(...Object.keys(REJECTION_REASONS), 'none')
 +const RPCS = set(...telemetry.TELEMETRY_RPC_NAMES, 'other')
 +const TIERS = set('authenticated', 'pre_auth')
++const OUTCOMES = set('success', 'rejected', 'failure')
 +const ALLOWED: Record<string, Record<string, Allowed>> = {
-+	'attestor_rpc_requests_total': { rpc: RPCS, outcome: set('success', 'failure'), 'error_code': ERROR_CODES, reason: REASONS },
-+	'attestor_rpc_duration_seconds': { rpc: RPCS, outcome: set('success', 'failure') },
-+	'attestor_claims_total': { outcome: set('signed', 'rejected', 'failed'), reason: REASONS, 'chain_id': set('10143', 'unknown') },
++	'attestor_rpc_requests_total': { rpc: RPCS, outcome: OUTCOMES, 'error_code': ERROR_CODES, reason: REASONS },
++	'attestor_rpc_duration_seconds': { rpc: RPCS, outcome: OUTCOMES },
 +	'attestor_sockets_active': { tier: TIERS },
 +	'attestor_socket_closes_total': { tier: TIERS, 'close_code': set(...Object.values(telemetry.TELEMETRY_CLOSE_CODES), 'other') },
 +	'attestor_connection_terminations_total': { reason: set('INIT_TIMEOUT', 'AUTH_EXPIRED') },
@@ -980,7 +877,6 @@ index 0000000..7f2e9de
 +			assert.equal(delta('attestor_rpc_requests_total', { rpc: 'createTunnel', outcome: 'failure', 'error_code': 'ERROR_BAD_REQUEST', reason: 'HOST_NOT_ALLOWED' }), 1)
 +			assert.equal(delta('attestor_rpc_requests_total', { rpc: 'claimTunnel', outcome: 'failure', 'error_code': 'ERROR_NOT_FOUND', reason: 'TUNNEL_NOT_FOUND' }), 1)
 +			assert.equal(delta('attestor_rpc_duration_seconds', { rpc: 'init' }), 3)
-+			assert.equal(delta('attestor_claims_total', { outcome: 'failed', reason: 'TUNNEL_NOT_FOUND', 'chain_id': 'unknown' }), 1)
 +			assert.equal(delta('attestor_connection_terminations_total', { reason: 'INIT_TIMEOUT' }), 1)
 +			assert.equal(delta('attestor_connection_terminations_total', { reason: 'AUTH_EXPIRED' }), 1)
 +			assert.equal(delta('attestor_socket_closes_total', { tier: 'pre_auth' }), 2)
@@ -1000,28 +896,27 @@ index 0000000..7f2e9de
 +		}
 +	})
 +
-+	it('counts exactly one result per claimTunnel call', async() => {
-+		const claims = async() => total(await collect(), 'attestor_claims_total')
-+		const cases: [string, () => Promise<unknown>, Record<string, string>][] = [
-+			['signed', () => claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext()), { outcome: 'signed', reason: 'none', 'chain_id': '10143' }],
-+			['rejected', async() => {
-+				rejectClaim = true
-+				try {
-+					const res = await claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext())
-+					assert.equal(res.error?.code, proto.ErrorCode.ERROR_INVALID_CLAIM)
-+				} finally {
-+					rejectClaim = false
-+				}
-+			}, { outcome: 'rejected', reason: 'TRANSCRIPT_DECRYPT_FAILED', 'chain_id': '10143' }],
-+			['failed', () => assert.rejects(claimTunnel(claimRequest('{"contextAddress":"0x1"}'), handlerContext())), { outcome: 'failed', reason: 'CLAIM_CONTEXT_INVALID', 'chain_id': 'unknown' }]
++	it('classifies claimTunnel results where the RPC is handled: signed, signed rejection, thrown', async() => {
++		const signed = await claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext())
++		rejectClaim = true
++		const rejected = await claimTunnel(claimRequest(inputContext(SESSION_ID)), handlerContext()).finally(() => {
++			rejectClaim = false
++		})
++		assert.equal(rejected.error?.code, proto.ErrorCode.ERROR_INVALID_CLAIM)
++		const thrown = await claimTunnel(claimRequest('{"contextAddress":"0x1"}'), handlerContext()).then(
++			() => assert.fail('an unsupported context must throw'),
++			(err: unknown) => err
++		)
++		const cases: [string, Parameters<typeof telemetry.recordRpc>[2], Record<string, string>][] = [
++			['signed', { response: signed }, { outcome: 'success', 'error_code': 'none', reason: 'none' }],
++			['rejected', { response: rejected }, { outcome: 'rejected', 'error_code': 'ERROR_INVALID_CLAIM', reason: 'TRANSCRIPT_DECRYPT_FAILED' }],
++			['thrown', { error: thrown }, { outcome: 'failure', 'error_code': 'ERROR_BAD_REQUEST', reason: 'CLAIM_CONTEXT_INVALID' }]
 +		]
-+		for(const [name, run, match] of cases) {
-+			const before = await collect()
-+			const count = await claims()
-+			await run()
-+			const after = await collect()
-+			assert.equal(await claims() - count, 1, name)
-+			assert.equal(total(after, 'attestor_claims_total', match) - total(before, 'attestor_claims_total', match), 1, name)
++		for(const [name, result, match] of cases) {
++			const count = async() => total(await collect(), 'attestor_rpc_requests_total', { rpc: 'claimTunnel', ...match })
++			const before = await count()
++			telemetry.recordRpc('claimTunnel', 3, result)
++			assert.equal(await count() - before, 1, name)
 +		}
 +
 +		assertFinite(await collect())
@@ -1080,7 +975,7 @@ index 0000000..7f2e9de
 +		assert.equal(telemetry.startTelemetry({
 +			env: { OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: `http://127.0.0.1:${port}/v1/metrics`, OTEL_METRIC_EXPORT_INTERVAL: '200' }
 +		}), true)
-+		telemetry.recordRpc('init', 12, 'success')
++		telemetry.recordRpc('init', 12, { response: {} })
 +		await until(() => requests.some(request => request.body.includes('attestor_rpc_requests_total')), 5_000)
 +		const request = requests.find(item => item.body.includes('attestor_rpc_requests_total'))!
 +		assert.equal(request.url, '/v1/metrics')

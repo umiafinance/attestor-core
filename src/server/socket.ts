@@ -251,12 +251,12 @@ async function handleRpcRequest(
 
 		const durationMs = Date.now() - startedAt
 		logger.info({ durationMs }, 'handled RPC request')
-		recordRpc(type, durationMs, 'success')
+		recordRpc(type, durationMs, { response: res })
 		tx?.setOutcome('success')
 	} catch(err) {
 		const durationMs = Date.now() - startedAt
 		logger.error({ err, durationMs }, 'error in RPC request')
-		recordRpc(type, durationMs, 'failure', err)
+		recordRpc(type, durationMs, { error: err })
 		try {
 			await respond(AttestorError.fromError(err))
 		} catch(sendErr) {

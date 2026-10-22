@@ -15,19 +15,21 @@ const layers = ['epoch', 'auth', 'log', 'host', 'deps', 'consolidate', 'diagnost
 const files = ['claim-epoch.patch', 'auth-lifetime.patch', 'log-privacy.patch', 'host-policy.patch', 'dependency-remediation.patch', 'source-consolidation.patch', 'admission-diagnostics.patch', 'sec-hardening.patch', 'certificate-trust.patch', 'attestor-telemetry.patch']
 const count = layers.indexOf(layer) + 1
 const digest = /^[a-f0-9]{64}$/
-if (!count || !/^[a-f0-9]{40}$/.test(manifest.upstreamCommit) || manifest.patches.length !== layers.length
-    || !digest.test(manifest.packageSha256) || !digest.test(manifest.packageLockSha256)) throw Error('invalid source manifest')
+if (!count || !/^[a-f0-9]{40}$/.test(manifest.upstreamCommit) || manifest.patches.length !== layers.length) throw Error('invalid source manifest')
 console.log(`UPSTREAM\t${manifest.upstreamCommit}`)
 for (const [index, patch] of manifest.patches.entries()) {
     if (patch.layer !== layers[index] || patch.file !== files[index] || !digest.test(patch.sha256)
-        || !Array.isArray(patch.tests) || patch.tests.some(test => !/^[a-z0-9-]+\.test\.ts$/.test(test))) throw Error('invalid source patch entry')
+        || !Array.isArray(patch.tests) || patch.tests.some(test => !/^[a-z0-9-]+\.test\.ts$/.test(test))
+        || ('packageSha256' in patch && !(digest.test(patch.packageSha256) && digest.test(patch.packageLockSha256)))) throw Error('invalid source patch entry')
     if (index >= count) continue
     console.log(`PATCH\t${patch.file}\t${patch.sha256}`)
     for (const test of patch.tests) console.log(`TEST\t${test}`)
 }
-if (count >= 5) {
-    console.log(`PACKAGE\t${manifest.packageSha256}`)
-    console.log(`LOCK\t${manifest.packageLockSha256}`)
+// A layer that edits the package files records their digests; later layers inherit them.
+const packages = manifest.patches.slice(0, count).findLast(patch => 'packageSha256' in patch)
+if (packages) {
+    console.log(`PACKAGE\t${packages.packageSha256}`)
+    console.log(`LOCK\t${packages.packageLockSha256}`)
 }
 NODE
 )
@@ -91,9 +93,10 @@ const source = {
     upstreamCommit: manifest.upstreamCommit,
     patches: manifest.patches.slice(0, count).map(({ file, sha256 }) => ({ file, sha256 }))
 }
-if (count >= 5) {
-    source.packageSha256 = manifest.packageSha256
-    source.packageLockSha256 = manifest.packageLockSha256
+const packages = manifest.patches.slice(0, count).findLast(patch => 'packageSha256' in patch)
+if (packages) {
+    source.packageSha256 = packages.packageSha256
+    source.packageLockSha256 = packages.packageLockSha256
 }
 console.log(JSON.stringify(source))
 NODE
