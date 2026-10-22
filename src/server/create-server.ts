@@ -16,6 +16,7 @@ import {
 import { AttestorServerSocket, hasAuthSocketCapacity } from '#src/server/socket.ts'
 import { getAttestorAddress, getInitialMessagesFromQuery } from '#src/server/utils/generics.ts'
 import { addKeepAlive } from '#src/server/utils/keep-alive.ts'
+import { observeSocket } from '#src/server/utils/telemetry.ts'
 import type { BGPListener } from '#src/types/index.ts'
 import { createBgpListener } from '#src/utils/bgp-listener.ts'
 import { assertValidAuthRequest } from '#src/utils/auth.ts'
@@ -158,9 +159,11 @@ async function handleUpgrade(
 
 	const destroy = () => socket.destroy()
 	socket.on('error', destroy)
-	const server = await hasVerifiedQueryAuth(request) ? wss : preAuthWss
+	const authenticated = await hasVerifiedQueryAuth(request)
+	const server = authenticated ? wss : preAuthWss
 	socket.off('error', destroy)
 	server.handleUpgrade(request, socket, head, (ws) => {
+		observeSocket(ws, authenticated ? 'authenticated' : 'pre_auth')
 		wss.emit('connection', ws, request)
 	})
 }

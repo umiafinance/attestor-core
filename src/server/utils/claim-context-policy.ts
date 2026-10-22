@@ -22,6 +22,7 @@ type InputContext = {
 	identityProvider: string
 	reclaimSessionId: string
 	allowedHashes: readonly string[]
+	chainId: string
 }
 
 function boundAuthIdentity(value: string | undefined): {
@@ -36,6 +37,11 @@ function boundAuthIdentity(value: string | undefined): {
 		|| [...hashes].sort().join(',') !== parts[3]
 		|| new Set(hashes).size !== hashes.length) return undefined
 	return { sessionId: parts[1], identityProvider: parts[2], allowedHashes: hashes, scopeDigest: parts[4] }
+}
+
+/** The Umia session ID inside a `umia1:` auth ID; the hops correlate their logs on it. */
+export function boundAuthSessionId(authIdentity: string | undefined): string | undefined {
+	return boundAuthIdentity(authIdentity)?.sessionId
 }
 
 // The runner adapter matches this exact message; the reason carries the finite detail.
@@ -104,7 +110,8 @@ export function assertSupportedInputContext(
 		contextMessage: input.contextMessage as string,
 		identityProvider: input.identityProvider,
 		reclaimSessionId: binding.sessionId,
-		allowedHashes: binding.allowedHashes
+		allowedHashes: binding.allowedHashes,
+		chainId: form.chainId
 	}
 }
 

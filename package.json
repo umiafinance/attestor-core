@@ -89,6 +89,10 @@
   "license": "AGPL-3.0-only",
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.223.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-metrics": "2.12.0",
     "@peculiar/asn1-x509": "^2.6.1",
     "@peculiar/webcrypto": "^1.5.0",
     "@peculiar/x509": "^1.14.3",

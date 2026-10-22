@@ -13,6 +13,8 @@ setCryptoImplementation(webcryptoCrypto)
 async function main() {
 	// importing dynamically to allow APM to inject
 	// into modules before they are used
+	const { startTelemetry } = await import('#src/server/utils/telemetry.ts')
+	startTelemetry()
 	const { createServer } = await import('#src/server/index.ts')
 	return createServer()
 }
