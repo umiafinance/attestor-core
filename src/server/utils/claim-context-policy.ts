@@ -22,7 +22,6 @@ type InputContext = {
 	identityProvider: string
 	reclaimSessionId: string
 	allowedHashes: readonly string[]
-	chainId: string
 }
 
 function boundAuthIdentity(value: string | undefined): {
@@ -110,8 +109,7 @@ export function assertSupportedInputContext(
 		contextMessage: input.contextMessage as string,
 		identityProvider: input.identityProvider,
 		reclaimSessionId: binding.sessionId,
-		allowedHashes: binding.allowedHashes,
-		chainId: form.chainId
+		allowedHashes: binding.allowedHashes
 	}
 }
 

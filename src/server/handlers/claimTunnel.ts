@@ -5,7 +5,6 @@ import { ClaimTunnelResponse } from '#src/proto/api.ts'
 import { getApm } from '#src/server/utils/apm.ts'
 import { assertTranscriptsMatch, assertValidClaimRequest } from '#src/server/utils/assert-valid-claim-request.ts'
 import { signClaimResponse } from '#src/server/utils/sign-claim-response.ts'
-import { recordClaim } from '#src/server/utils/telemetry.ts'
 import { assertAuthenticatedClaimAuthority } from '#src/server/utils/host-policy.ts'
 import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
 import type { RPCHandler } from '#src/types/index.ts'
@@ -16,26 +15,10 @@ import {
 } from '#src/utils/index.ts'
 import { rejection, withRejectionReason } from '#src/utils/rejection-reason.ts'
 
-type ClaimObservation = { chainId?: string, rejection?: AttestorError }
-
-// One result per call: a signed claim, a signed rejection, or a thrown failure.
-export const claimTunnel: RPCHandler<'claimTunnel'> = async(claimRequest, ctx) => {
-	const observation: ClaimObservation = {}
-	try {
-		const res = await processClaimTunnel(claimRequest, ctx, observation)
-		recordClaim(observation.rejection ? 'rejected' : 'signed', observation.rejection, observation.chainId)
-		return res
-	} catch(err) {
-		recordClaim('failed', err, observation.chainId)
-		throw err
-	}
-}
-
-async function processClaimTunnel(
-	claimRequest: Parameters<RPCHandler<'claimTunnel'>>[0],
-	{ tx, logger, client }: Parameters<RPCHandler<'claimTunnel'>>[1],
-	observation: ClaimObservation
-) {
+export const claimTunnel: RPCHandler<'claimTunnel'> = async(
+	claimRequest,
+	{ tx, logger, client }
+) => {
 	const {
 		request,
 		data: { timestampS } = {},
@@ -78,7 +61,6 @@ async function processClaimTunnel(
 	let inputContext: ReturnType<typeof assertSupportedInputContext>
 	try {
 		inputContext = assertSupportedInputContext(claimRequest.data?.context, client.authIdentity, CLAIM_CHAIN_IDS)
-		observation.chainId = inputContext.chainId
 	} catch(err) {
 		client.removeTunnel(request.id)
 		throw err
@@ -118,7 +100,6 @@ async function processClaimTunnel(
 	} catch(err) {
 		logger.error({ err }, 'invalid claim request')
 		const attestorErr = AttestorError.fromError(err, 'ERROR_INVALID_CLAIM')
-		observation.rejection = attestorErr
 		res.error = attestorErr.toProto()
 	}
 
