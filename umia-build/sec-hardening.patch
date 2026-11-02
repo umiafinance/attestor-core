@@ -3519,14 +3519,15 @@ new file mode 100644
 index 0000000..b964722
 --- /dev/null
 +++ b/src/server/utils/stwo-proof-compression.ts
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,38 @@
 +import { inflateSync } from 'node:zlib'
 +import { ZKProofEngine, type ClaimTunnelRequest } from '#src/proto/api.ts'
 +import { AttestorError } from '#src/utils/index.ts'
 +
 +const MAGIC = Buffer.from('UMIA_STWO_ZLIB_V1\0')
 +const MAX_PROOF_BYTES = 4 * 1024 * 1024
-+const MAX_TOTAL_PROOF_BYTES = 32 * 1024 * 1024
++// Compressed claims may fit the 32 MiB wire cap while restoring more proof bytes.
++const MAX_TOTAL_PROOF_BYTES = 64 * 1024 * 1024
 +
 +/** Called only after the signed request has been verified. */
 +export function restoreStwoProofs(request: ClaimTunnelRequest) {
@@ -3562,7 +3563,7 @@ new file mode 100644
 index 0000000..bb1444a
 --- /dev/null
 +++ b/src/tests/stwo-proof-compression.test.ts
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,70 @@
 +import assert from 'node:assert/strict'
 +import { deflateSync } from 'node:zlib'
 +import { it } from 'node:test'
@@ -3593,4 +3594,43 @@ index 0000000..bb1444a
 +	assert.throws(() => restoreStwoProofs(request(encoded, ZKProofEngine.ZK_ENGINE_SNARKJS)))
 +	assert.throws(() => restoreStwoProofs(request(encoded)))
 +	assert.throws(() => restoreStwoProofs(request(Buffer.concat([magic, new Uint8Array([1, 2, 3])]))))
++})
++
++
++it('admits an Echo-sized compressed transcript above the former 32 MiB inflated limit', () => {
++	// Synthetic bytes only: same total and maximum as the client diagnostic;
++	// this exercises admission, not proof verification or a real Echo capture.
++	const sizes = [...Array(28).fill(1_473_373), 1_201_077]
++	assert.equal(sizes.reduce((total, size) => total + size, 0), 42_455_521)
++	const claim = ClaimTunnelRequest.create({
++		zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
++		transcript: sizes.map(size => ({ reveal: { zkReveal: { proofs: [{
++			proofData: Buffer.concat([magic, deflateSync(new Uint8Array(size).fill(0x41))])
++		}] } } }))
++	})
++	restoreStwoProofs(claim)
++	assert.deepEqual(claim.transcript.map(packet => packet.reveal?.zkReveal?.proofs[0].proofData.length), sizes)
++})
++
++it('bounds cumulative inflated bytes across packets, including mixed compressed and raw proofs', () => {
++	const raw = new Uint8Array(4 * 1024 * 1024).fill(0x41)
++	const encoded = Buffer.concat([magic, deflateSync(raw)])
++	for(const compressed of [false, true]) {
++		const claim = ClaimTunnelRequest.create({
++			zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
++			transcript: Array.from({ length: 16 }, (_, index) => ({
++				reveal: { zkReveal: { proofs: [{ proofData: compressed && index % 2 ? encoded : raw }] } }
++			}))
++		})
++		// Exactly 64 MiB fits; the next byte in a separate packet must fail.
++		restoreStwoProofs(claim)
++		claim.transcript.push(ClaimTunnelRequest.create({
++			transcript: [{ reveal: { zkReveal: { proofs: [{ proofData: new Uint8Array(1) }] } } }]
++		}).transcript[0])
++		assert.throws(() => restoreStwoProofs(claim), /Total proof bytes too large/)
++	}
++})
++
++it('keeps the individual raw proof limit at 4 MiB', () => {
++	assert.throws(() => restoreStwoProofs(request(new Uint8Array(4 * 1024 * 1024 + 1))), /Proof too large/)
 +})

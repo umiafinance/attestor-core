@@ -11,17 +11,28 @@ manifest_rows=$(node - "$manifest_file" "$layer" <<'NODE'
 const fs = require('node:fs')
 const [file, layer] = process.argv.slice(2)
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
-const layers = ['epoch', 'auth', 'log', 'host', 'deps', 'consolidate', 'diagnostics', 'hardening', 'trust', 'final']
-const files = ['claim-epoch.patch', 'auth-lifetime.patch', 'log-privacy.patch', 'host-policy.patch', 'dependency-remediation.patch', 'source-consolidation.patch', 'admission-diagnostics.patch', 'sec-hardening.patch', 'certificate-trust.patch', 'attestor-telemetry.patch']
-const count = layers.indexOf(layer) + 1
 const digest = /^[a-f0-9]{64}$/
-if (!count || !/^[a-f0-9]{40}$/.test(manifest.upstreamCommit) || manifest.patches.length !== layers.length) throw Error('invalid source manifest')
-console.log(`UPSTREAM\t${manifest.upstreamCommit}`)
-for (const [index, patch] of manifest.patches.entries()) {
-    if (patch.layer !== layers[index] || patch.file !== files[index] || !digest.test(patch.sha256)
+const name = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+if (!/^[a-f0-9]{40}$/.test(manifest.upstreamCommit) || !Array.isArray(manifest.patches)
+    || !manifest.patches.length) throw Error('invalid source manifest')
+const layers = new Set()
+const files = new Set()
+for (const patch of manifest.patches) {
+    if (!patch || typeof patch.layer !== 'string' || !name.test(patch.layer) || !/^[a-z0-9-]+\.patch$/.test(patch.file)
+        || layers.has(patch.layer) || files.has(patch.file) || !digest.test(patch.sha256)
         || !Array.isArray(patch.tests) || patch.tests.some(test => !/^[a-z0-9-]+\.test\.ts$/.test(test))
-        || ('packageSha256' in patch && !(digest.test(patch.packageSha256) && digest.test(patch.packageLockSha256)))) throw Error('invalid source patch entry')
-    if (index >= count) continue
+        || ('imageTagSuffix' in patch && (typeof patch.imageTagSuffix !== 'string' || !name.test(patch.imageTagSuffix)))
+        || (('packageSha256' in patch || 'packageLockSha256' in patch)
+            && !(digest.test(patch.packageSha256) && digest.test(patch.packageLockSha256)))) throw Error('invalid source patch entry')
+    layers.add(patch.layer)
+    files.add(patch.file)
+}
+const count = manifest.patches.findIndex(patch => patch.layer === layer) + 1
+if (!count) throw Error(`unknown source layer: ${layer}`)
+const selected = manifest.patches[count - 1]
+console.log(`UPSTREAM\t${manifest.upstreamCommit}`)
+console.log(`IMAGE\tumia-attestor:${manifest.upstreamCommit.slice(0, 7)}-${selected.imageTagSuffix ?? selected.layer}`)
+for (const patch of manifest.patches.slice(0, count)) {
     console.log(`PATCH\t${patch.file}\t${patch.sha256}`)
     for (const test of patch.tests) console.log(`TEST\t${test}`)
 }
@@ -41,6 +52,7 @@ lock_sha=
 while IFS=$'\t' read -r kind value digest; do
     case "$kind" in
         UPSTREAM) upstream_sha=$value ;;
+        IMAGE) default_tag=$value ;;
         PATCH) patches+=("$value:$digest") ;;
         TEST) tests+=("src/tests/$value") ;;
         PACKAGE) package_sha=$value ;;
@@ -122,6 +134,8 @@ case "${1:-}" in
             # Match the image dependency stage before the upstream .npmrc is copied.
             rm .npmrc
             npm ci --ignore-scripts --no-audit --no-fund
+            # The final server requires the native engine; exercise its install hook.
+            if [[ "$layer" == final ]]; then npm rebuild re2; fi
             npm run build
             if [[ "$layer" != epoch && "$layer" != auth ]]; then
                 npm run run:tsc -- src/scripts/build-browser.ts
@@ -130,6 +144,9 @@ case "${1:-}" in
             node --experimental-strip-types --experimental-test-module-mocks --test "${tests[@]}"
             if [[ -n "$lock_sha" ]]; then
                 npm prune --omit=dev --ignore-scripts --no-audit --no-fund
+                if [[ "$layer" == final ]]; then
+                    node --experimental-strip-types --experimental-test-module-mocks --test src/tests/regex-safety.test.ts
+                fi
                 node "$script_dir/verify-production-audit.mjs" "$build_dir/context" "$build_dir/reviewed-package-lock.json" "$lock_sha"
             fi
         )
@@ -139,18 +156,6 @@ case "${1:-}" in
             echo 'expected one image tag' >&2
             exit 2
         fi
-        case "$layer" in
-            epoch) default_tag=umia-attestor:f6ff0e3-epoch ;;
-            auth) default_tag=umia-attestor:f6ff0e3-epoch-auth ;;
-            log) default_tag=umia-attestor:f6ff0e3-epoch-auth-log ;;
-            host) default_tag=umia-attestor:f6ff0e3-epoch-auth-log-host ;;
-            deps) default_tag=umia-attestor:f6ff0e3-epoch-auth-log-host-deps ;;
-            consolidate) default_tag=umia-attestor:f6ff0e3-consolidate ;;
-            diagnostics) default_tag=umia-attestor:f6ff0e3-diagnostics ;;
-            hardening) default_tag=umia-attestor:f6ff0e3-hardening ;;
-            trust) default_tag=umia-attestor:f6ff0e3-trust ;;
-            final) default_tag=umia-attestor:f6ff0e3-final ;;
-        esac
         image_tag=${1:-$default_tag}
         build_args=()
         if [[ -n "${ATTESTOR_DOCKER_BUILD_NETWORK:-}" ]]; then

@@ -1,0 +1,597 @@
+diff --git a/src/utils/bgp-listener.ts b/src/utils/bgp-listener.ts
+index 8145a8b18..0d30eaec8 100644
+--- a/src/utils/bgp-listener.ts
++++ b/src/utils/bgp-listener.ts
+@@ -3,9 +3,12 @@ import type { Logger } from 'pino'
+ 
+ import { BGP_WS_URL } from '#src/config/index.ts'
+ import type { BGPAnnouncementOverlapData, BGPListener } from '#src/types/index.ts'
++import { BGP_EVENTS } from '#src/utils/diagnostic-events.ts'
+ import { makeWebSocket } from '#src/utils/ws.ts'
+ 
+ const ANNOUNCEMENT_OVERLAP = 'announcement-overlap'
++const RECONNECT_MIN_MS = 1_000
++const RECONNECT_MAX_MS = 30_000
+ 
+ class BGPAnnouncementOverlapEvent extends Event {
+ 
+@@ -22,8 +25,10 @@ class BGPAnnouncementOverlapEvent extends Event {
+  * an announcement overlaps with a target IP.
+  */
+ export function createBgpListener(logger: Logger): BGPListener {
+-	let ws: ReturnType<typeof makeWebSocket>
++	let ws: ReturnType<typeof makeWebSocket> | undefined
+ 	let closed = false
++	let reconnectTimer: ReturnType<typeof setTimeout> | undefined
++	let reconnectDelay = RECONNECT_MIN_MS
+ 
+ 	const targetIps = new Set<string>()
+ 	const eventTarget = new EventTarget()
+@@ -57,61 +62,111 @@ export function createBgpListener(logger: Logger): BGPListener {
+ 			}
+ 		},
+ 		close() {
+-			ws.onclose = null
+-			ws.onerror = null
+-			ws.close()
++			// Invalidate callbacks before closing; close/error may already be queued.
+ 			closed = true
++			clearTimeout(reconnectTimer)
++			reconnectTimer = undefined
++			const socket = ws
++			ws = undefined
++			if(socket) retire(socket)
+ 		}
+ 	}
+ 
+-	function openWs() {
+-		logger.debug('connecting to BGP websocket')
++	function openWs(): void {
++		if(closed) return
++		logger.debug({ event: BGP_EVENTS.connecting })
++
++		let socket: ReturnType<typeof makeWebSocket>
++		try {
++			socket = makeWebSocket(BGP_WS_URL)
++		} catch(err) {
++			logger.warn({ event: BGP_EVENTS.connectFailed, err })
++			scheduleReconnect()
++			return
++		}
++
++		ws = socket
++		socket.onopen = () => {
++			if(!isCurrent()) return
++			// Always send through the socket that owns this callback.
++			if(socket.readyState !== WebSocket.OPEN) {
++				logger.warn({ event: BGP_EVENTS.notOpen })
++				onClose()
++				return
++			}
+ 
+-		ws = makeWebSocket(BGP_WS_URL)
+-		ws.onopen = onOpen
+-		ws.onerror = (ev) => onClose(ev)
+-		ws.onclose = () => onClose(new Error('Unexpected close'))
+-		ws.onmessage = ({ data }) => {
+-			const str = typeof data === 'string' ? data : data.toString()
+ 			try {
++				socket.send(JSON.stringify({ type: 'ris_subscribe', data: { type: 'UPDATE' } }))
++			} catch(err) {
++				logger.warn({ event: BGP_EVENTS.subscribeFailed, err })
++				onClose()
++				return
++			}
++
++			reconnectDelay = RECONNECT_MIN_MS
++			logger.info({ event: BGP_EVENTS.connected })
++		}
++		socket.onerror = () => {
++			if(!isCurrent()) return
++			logger.warn({ event: BGP_EVENTS.connectionError })
++			onClose()
++		}
++		socket.onclose = () => {
++			if(!isCurrent()) return
++			logger.warn({ event: BGP_EVENTS.closed })
++			onClose()
++		}
++		socket.onmessage = ({ data }) => {
++			if(!isCurrent()) return
++			try {
++				const str = typeof data === 'string' ? data : data.toString()
+ 				onMessage(str)
+ 			} catch(err) {
+-				logger.error({ data, err }, 'error processing BGP message')
++				logger.error({ event: BGP_EVENTS.messageInvalid, err })
+ 			}
+ 		}
+-	}
+ 
+-	function onOpen(): void {
+-		const subscriptionMessage = {
+-			type: 'ris_subscribe',
+-			data: {
+-				type: 'UPDATE',
+-			},
++		function isCurrent(): boolean {
++			return !closed && ws === socket
+ 		}
+-		ws.send(JSON.stringify(subscriptionMessage))
+-
+-		logger.info('connected to BGP websocket')
+-	}
+ 
+-	function onClose(err?: Error | Event) {
+-		if(closed) {
+-			return
++		function onClose(): void {
++			if(!isCurrent()) return
++			// error followed by close (or any queued callback) retires only once.
++			ws = undefined
++			retire(socket)
++			scheduleReconnect()
+ 		}
++	}
+ 
+-		logger.info({ err }, 'BGP websocket closed')
+-		if(!err) {
+-			return
++	function retire(socket: ReturnType<typeof makeWebSocket>): void {
++		socket.onopen = null
++		socket.onmessage = null
++		socket.onerror = null
++		socket.onclose = null
++		try {
++			socket.close()
++		} catch(err) {
++			logger.warn({ event: BGP_EVENTS.closeFailed, err })
+ 		}
++	}
+ 
+-		logger.info('reconnecting to BGP websocket')
+-		openWs()
++	function scheduleReconnect(): void {
++		if(closed || reconnectTimer !== undefined) return
++		logger.info({ event: BGP_EVENTS.reconnecting })
++		reconnectTimer = setTimeout(() => {
++			reconnectTimer = undefined
++			openWs()
++		}, reconnectDelay)
++		reconnectTimer.unref()
++		reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
+ 	}
+ 
+ 	function onMessage(message: string): void {
+ 		const data = JSON.parse(message)
+ 		const announcements = data?.data?.announcements
+ 
+-		logger.trace({ data }, 'got BGP update')
++		logger.trace({ event: BGP_EVENTS.update })
+ 
+ 		if(!Array.isArray(announcements)) {
+ 			return
+diff --git a/src/utils/diagnostic-events.ts b/src/utils/diagnostic-events.ts
+new file mode 100644
+index 000000000..9facb13ee
+--- /dev/null
++++ b/src/utils/diagnostic-events.ts
+@@ -0,0 +1,55 @@
++/** Server-owned event references keep classification independent of log wording. */
++export const BGP_EVENTS = {
++	connecting: { stage: 'bgp', outcome: 'started' },
++	reconnecting: { stage: 'bgp', outcome: 'started' },
++	connected: { stage: 'bgp', outcome: 'success' },
++	update: { stage: 'bgp', outcome: 'success' },
++	connectFailed: { stage: 'bgp', outcome: 'failure', reason: 'BGP_CONNECT_FAILED' },
++	subscribeFailed: { stage: 'bgp', outcome: 'failure', reason: 'BGP_SUBSCRIBE_FAILED' },
++	notOpen: { stage: 'bgp', outcome: 'failure', reason: 'BGP_NOT_OPEN' },
++	connectionError: { stage: 'bgp', outcome: 'failure', reason: 'BGP_CONNECTION_ERROR' },
++	closed: { stage: 'bgp', outcome: 'failure', reason: 'BGP_CLOSED' },
++	closeFailed: { stage: 'bgp', outcome: 'failure', reason: 'BGP_CLOSE_FAILED' },
++	messageInvalid: { stage: 'bgp', outcome: 'failure', reason: 'BGP_MESSAGE_INVALID' }
++} as const
++
++const ERROR_REASONS = {
++	InvalidStateError: 'INVALID_STATE',
++	ECONNRESET: 'CONNECTION_RESET',
++	EPIPE: 'BROKEN_PIPE',
++	ECONNREFUSED: 'CONNECTION_REFUSED',
++	ETIMEDOUT: 'CONNECTION_TIMEOUT',
++	UND_ERR_CONNECT_TIMEOUT: 'CONNECTION_TIMEOUT',
++	ENOTFOUND: 'DNS_LOOKUP_FAILED',
++	EAI_AGAIN: 'DNS_LOOKUP_FAILED',
++	ENETUNREACH: 'NETWORK_UNREACHABLE',
++	EHOSTUNREACH: 'NETWORK_UNREACHABLE'
++} as const
++
++export type DiagnosticEvent = typeof BGP_EVENTS[keyof typeof BGP_EVENTS]
++export type DiagnosticReason = Extract<DiagnosticEvent, { reason: string }>['reason']
++	| typeof ERROR_REASONS[keyof typeof ERROR_REASONS]
++
++// Capture immutable projections; client-shaped copies cannot become trusted events.
++const events = new Map<unknown, DiagnosticEvent>(Object.values(BGP_EVENTS)
++	.map(event => [event, Object.freeze({ ...event })] as const))
++const reasons = new Set<string>([
++	...Object.values(ERROR_REASONS),
++	...Object.values(BGP_EVENTS).flatMap(event => 'reason' in event ? [event.reason] : [])
++])
++
++export function diagnosticEvent(value: unknown): DiagnosticEvent | undefined {
++	return events.get(value)
++}
++
++export function isDiagnosticReason(value: unknown): value is DiagnosticReason {
++	return typeof value === 'string' && reasons.has(value)
++}
++
++export function diagnosticReason(err: unknown): DiagnosticReason | undefined {
++	if(!(err instanceof Error)) return undefined
++	const code = err.name === 'InvalidStateError' ? err.name : (err as NodeJS.ErrnoException).code
++	return typeof code === 'string' && Object.hasOwn(ERROR_REASONS, code)
++		? ERROR_REASONS[code as keyof typeof ERROR_REASONS]
++		: undefined
++}
+diff --git a/src/utils/logger.ts b/src/utils/logger.ts
+index 72351128d..accf5ce6c 100644
+--- a/src/utils/logger.ts
++++ b/src/utils/logger.ts
+@@ -2,19 +2,21 @@ import { type Bindings, type ChildLoggerOptions, type DestinationStream, type Lo
+ 
+ import type { LogLevel } from '#src/types/index.ts'
+ import { ErrorCode } from '#src/proto/api.ts'
++import { diagnosticEvent, diagnosticReason, type DiagnosticReason, isDiagnosticReason } from '#src/utils/diagnostic-events.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { AttestorError } from '#src/utils/error.ts'
+ import { REJECTION_REASONS, type RejectionReason, rejectionReason } from '#src/utils/rejection-reason.ts'
+ 
+-const STAGES = ['connection', 'init', 'rpc', 'tunnel', 'claimTunnel', 'claimTeeBundle', 'provider', 'tee'] as const
++const STAGES = ['connection', 'init', 'rpc', 'tunnel', 'claimTunnel', 'claimTeeBundle', 'provider', 'tee', 'bgp'] as const
+ const OUTCOMES = ['started', 'success', 'failure', 'timeout', 'expired'] as const
+ const HANDLERS = ['claimTunnel', 'claimTeeBundle'] as const
+ type Stage = typeof STAGES[number]
+ type Outcome = typeof OUTCOMES[number]
+ type Handler = typeof HANDLERS[number]
+ type SafeErrorCode = keyof typeof ErrorCode | 'INTERNAL_ERROR'
+-type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode, reason?: RejectionReason }
+-const EVENTS: Record<string, { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode }> = {
++type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode, reason?: RejectionReason | DiagnosticReason }
++type LogEvent = { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode, reason?: RejectionReason | DiagnosticReason }
++const EVENTS: Record<string, LogEvent> = {
+ 	'new connection, validating...': { stage: 'connection', outcome: 'started' },
+ 	'connection accepted': { stage: 'connection', outcome: 'success' },
+ 	'error in new connection': { stage: 'init', outcome: 'failure' },
+@@ -109,9 +111,10 @@ export function makeLogger(
+ 					const message = args.find(arg => typeof arg === 'string')
+ 					const details = args.find(arg => typeof arg === 'object' && arg !== null)
+ 					const evidence = projectEvidence(details)
+-					const event: { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode } = typeof message === 'string' && Object.hasOwn(EVENTS, message)
+-						? EVENTS[message]
+-						: { stage: 'rpc', outcome: evidence.errorCode || levelNumber >= 40 ? 'failure' : 'started' }
++					const event: LogEvent = diagnosticEvent(details && 'event' in details ? details.event : undefined)
++						?? (typeof message === 'string' && Object.hasOwn(EVENTS, message)
++							? EVENTS[message]
++							: { stage: 'rpc', outcome: evidence.errorCode || levelNumber >= 40 ? 'failure' : 'started' })
+ 					if(event.outcome === 'success' || event.outcome === 'started') {
+ 						delete evidence.errorCode
+ 						delete evidence.reason
+@@ -218,7 +221,7 @@ function projectEvidence(input: unknown): SafeEvidence {
+ }
+ 
+ function errorEvidence(err: unknown): SafeEvidence {
+-	const reason = rejectionReason(err)
++	const reason = rejectionReason(err) ?? diagnosticReason(err)
+ 	return reason ? { errorCode: safeErrorCode(err), reason } : { errorCode: safeErrorCode(err) }
+ }
+ 
+@@ -230,7 +233,7 @@ export function redact(input: unknown): Record<string, unknown> {
+ 		if(typeof value.stage === 'string' && STAGES.includes(value.stage as Stage)) safe.stage = value.stage
+ 		if(typeof value.outcome === 'string' && OUTCOMES.includes(value.outcome as Outcome)) safe.outcome = value.outcome
+ 		if(typeof value.errorCode === 'string' && (value.errorCode === 'INTERNAL_ERROR' || Object.hasOwn(ErrorCode, value.errorCode))) safe.errorCode = value.errorCode
+-		if(typeof value.reason === 'string' && Object.hasOwn(REJECTION_REASONS, value.reason)) safe.reason = value.reason
++		if(typeof value.reason === 'string' && (Object.hasOwn(REJECTION_REASONS, value.reason) || isDiagnosticReason(value.reason))) safe.reason = value.reason
+ 		return safe
+ 	} catch {
+ 		return {}
+diff --git a/src/tests/bgp-listener.test.ts b/src/tests/bgp-listener.test.ts
+index e9739472d..abf6856fa 100644
+--- a/src/tests/bgp-listener.test.ts
++++ b/src/tests/bgp-listener.test.ts
+@@ -62,6 +62,7 @@ describe('BGP Listener', () => {
+ let mockWs: MockWS
+ 
+ class MockWS {
++	readyState = WebSocket.OPEN
+ 	constructor() {}
+ 	onopen: () => void
+ 	onmessage: (msg: MessageEvent) => void
+diff --git a/src/tests/bgp-reconnect.test.ts b/src/tests/bgp-reconnect.test.ts
+new file mode 100644
+index 000000000..26df6b224
+--- /dev/null
++++ b/src/tests/bgp-reconnect.test.ts
+@@ -0,0 +1,284 @@
++import assert from 'node:assert/strict'
++import { spawnSync } from 'node:child_process'
++import type { AddressInfo } from 'node:net'
++import { Writable } from 'node:stream'
++import { afterEach, beforeEach, describe, it, mock } from 'node:test'
++import { setTimeout as delay } from 'node:timers/promises'
++import { WebSocketServer } from 'ws'
++
++import { BGP_EVENTS } from '#src/utils/diagnostic-events.ts'
++import { makeLogger } from '#src/utils/logger.ts'
++
++const CANARY = 'PRIVATE_HOST_AUTH_ERROR_PAYLOAD'
++const NativeWebSocket = globalThis.WebSocket
++let socketFactory = (url: string): WebSocket => new NativeWebSocket(url)
++
++class FakeWebSocket {
++	static OPEN = 1
++	static instances: FakeWebSocket[] = []
++	static failConstruction = false
++	readyState = 0
++	onopen: (() => void) | null = null
++	onerror: (() => void) | null = null
++	onclose: (() => void) | null = null
++	onmessage: ((event: { data: string | { toString(): string } }) => void) | null = null
++	sent: string[] = []
++	closes = 0
++	failSend = false
++	failClose = false
++	constructor(_url: string) {
++		if(FakeWebSocket.failConstruction) throw new Error(CANARY)
++		FakeWebSocket.instances.push(this)
++	}
++	send(value: string) {
++		if(this.readyState !== FakeWebSocket.OPEN) throw new DOMException('Sent before connected.', 'InvalidStateError')
++		if(this.failSend) throw new DOMException(CANARY, 'InvalidStateError')
++		this.sent.push(value)
++	}
++	close() {
++		this.closes++
++		if(this.failClose) throw new Error(CANARY)
++		this.readyState = 3
++	}
++	open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.() }
++}
++
++mock.module('#src/utils/ws.ts', {
++	namedExports: { makeWebSocket: (url: string) => socketFactory(url) }
++})
++const { createBgpListener } = await import('#src/utils/bgp-listener.ts')
++
++function capture() {
++	const lines: string[] = []
++	const stream = new Writable({ write(chunk, _encoding, done) { lines.push(chunk.toString()); done() } })
++	return { logger: makeLogger(false, 'trace', undefined, stream), lines }
++}
++
++describe('BGP socket lifecycle', () => {
++	let listener: ReturnType<typeof createBgpListener> | undefined
++	let logs: ReturnType<typeof capture>
++	beforeEach(() => {
++		FakeWebSocket.instances = []
++		FakeWebSocket.failConstruction = false
++		socketFactory = url => new FakeWebSocket(url) as unknown as WebSocket
++		mock.timers.enable({ apis: ['setTimeout'] })
++		logs = capture()
++	})
++	afterEach(() => {
++		listener?.close()
++		listener = undefined
++		mock.timers.reset()
++		socketFactory = url => new NativeWebSocket(url)
++		makeLogger(false, 'info')
++	})
++
++	function start() {
++		listener = createBgpListener(logs.logger)
++		return FakeWebSocket.instances.at(-1)!
++	}
++
++	it('ignores queued events from retired sockets and subscribes only the owning open socket', () => {
++		const a = start()
++		const lateOpen = a.onopen!
++		const lateError = a.onerror!
++		const lateClose = a.onclose!
++		const lateMessage = a.onmessage!
++		let overlaps = 0
++		listener!.onOverlap(['203.0.113.7'], () => overlaps++)
++		lateError()
++		assert.doesNotThrow(lateOpen)
++		lateClose()
++		assert.equal(a.closes, 1)
++		assert.equal(a.onopen, null)
++		assert.equal(a.onmessage, null)
++		assert.equal(a.onerror, null)
++		assert.equal(a.onclose, null)
++		mock.timers.tick(999)
++		assert.equal(FakeWebSocket.instances.length, 1)
++		mock.timers.tick(1)
++		const b = FakeWebSocket.instances[1]
++		assert.equal(b.readyState, 0)
++		assert.doesNotThrow(lateOpen)
++		lateError()
++		lateClose()
++		lateMessage({ data: JSON.stringify({ data: { path: ['test'], announcements: [{ prefixes: ['203.0.113.0/24'] }] } }) })
++		assert.equal(overlaps, 0)
++		assert.deepEqual(a.sent, [])
++		assert.deepEqual(b.sent, [])
++		b.open()
++		assert.deepEqual(b.sent.map(value => JSON.parse(value)), [{ type: 'ris_subscribe', data: { type: 'UPDATE' } }])
++		mock.timers.tick(60_000)
++		assert.equal(FakeWebSocket.instances.length, 2)
++	})
++
++	it('guards a non-OPEN subscription and recovers after a thrown send', () => {
++		const a = start()
++		assert.doesNotThrow(() => a.onopen!())
++		assert.deepEqual(a.sent, [])
++		mock.timers.tick(1_000)
++		const b = FakeWebSocket.instances[1]
++		b.failSend = true
++		b.failClose = true
++		assert.doesNotThrow(() => b.open())
++		assert.equal(b.closes, 1)
++		mock.timers.tick(2_000)
++		const c = FakeWebSocket.instances[2]
++		c.open()
++		assert.equal(c.sent.length, 1)
++		const reasons = logs.lines.map(line => JSON.parse(line).reason)
++		assert.ok(reasons.includes('BGP_NOT_OPEN'))
++		assert.ok(reasons.includes('BGP_SUBSCRIBE_FAILED'))
++		assert.ok(reasons.includes('BGP_CLOSE_FAILED'))
++		assert.ok(!logs.lines.join('').includes(CANARY))
++	})
++
++	it('backs off constructor failures up to 30s and resets after a successful subscription', () => {
++		FakeWebSocket.failConstruction = true
++		assert.doesNotThrow(start)
++		for(const wait of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]) mock.timers.tick(wait)
++		FakeWebSocket.failConstruction = false
++		mock.timers.tick(29_999)
++		assert.equal(FakeWebSocket.instances.length, 0)
++		mock.timers.tick(1)
++		const a = FakeWebSocket.instances[0]
++		a.open()
++		a.onclose!()
++		mock.timers.tick(999)
++		assert.equal(FakeWebSocket.instances.length, 1)
++		mock.timers.tick(1)
++		assert.equal(FakeWebSocket.instances.length, 2)
++	})
++
++	it('cancels pending retries when closed', () => {
++		const a = start()
++		a.onerror!()
++		listener!.close()
++		listener!.close()
++		mock.timers.tick(60_000)
++		assert.equal(FakeWebSocket.instances.length, 1)
++		assert.equal(a.closes, 1)
++	})
++
++	it('ignores all queued callbacks after shutdown even when socket.close throws', () => {
++		const a = start()
++		const callbacks = [a.onopen!, a.onerror!, a.onclose!]
++		const message = a.onmessage!
++		a.failClose = true
++		assert.doesNotThrow(() => listener!.close())
++		for(const callback of callbacks) assert.doesNotThrow(callback)
++		assert.doesNotThrow(() => message({ data: { toString() { throw new Error(CANARY) } } }))
++		mock.timers.tick(60_000)
++		assert.equal(FakeWebSocket.instances.length, 1)
++	})
++
++	it('contains malformed feed messages and keeps delivering current-socket overlaps', () => {
++		const a = start()
++		let overlaps = 0
++		const unsubscribe = listener!.onOverlap(['203.0.113.7'], () => overlaps++)
++		for(const data of ['not json', { toString() { throw new Error(CANARY) } }, JSON.stringify({ data: { path: ['test'], announcements: [{ prefixes: [null] }] } })]) {
++			assert.doesNotThrow(() => a.onmessage!({ data }))
++		}
++		const update = JSON.stringify({ data: { path: ['test'], announcements: [{ prefixes: ['203.0.113.0/24'] }] } })
++		a.onmessage!({ data: update })
++		assert.equal(overlaps, 1)
++		unsubscribe()
++		a.onmessage!({ data: update })
++		assert.equal(overlaps, 1)
++		const records = logs.lines.map(line => JSON.parse(line))
++		assert.ok(records.every(record => record.stage === 'bgp'))
++		assert.equal(records.filter(record => record.reason === 'BGP_MESSAGE_INVALID').length, 3)
++		assert.ok(!logs.lines.join('').includes(CANARY))
++	})
++})
++
++it('keeps trusted BGP diagnostics independent of wording and rejects client-shaped event copies', () => {
++	const { logger, lines } = capture()
++	try {
++		for(const message of [undefined, CANARY, 'handled RPC request']) {
++			logger.warn({ event: BGP_EVENTS.closed }, message)
++			const record = JSON.parse(lines.at(-1)!)
++			assert.equal(record.stage, 'bgp')
++			assert.equal(record.outcome, 'failure')
++			assert.equal(record.reason, 'BGP_CLOSED')
++		}
++
++		logger.warn({ event: { ...BGP_EVENTS.closed }, reason: 'BGP_CLOSED' }, CANARY)
++		const forged = JSON.parse(lines.at(-1)!)
++		assert.equal(forged.stage, 'rpc')
++		assert.equal(forged.reason, undefined)
++		assert.ok(!lines.join('').includes(CANARY))
++	} finally {
++		makeLogger(false, 'info')
++	}
++})
++
++it('records finite network failure reasons for RPCs without exposing error messages', () => {
++	const { logger, lines } = capture()
++	try {
++		for(const [code, reason] of [
++			['ECONNRESET', 'CONNECTION_RESET'], ['EPIPE', 'BROKEN_PIPE'],
++			['ECONNREFUSED', 'CONNECTION_REFUSED'], ['ETIMEDOUT', 'CONNECTION_TIMEOUT'],
++			['UND_ERR_CONNECT_TIMEOUT', 'CONNECTION_TIMEOUT'], ['ENOTFOUND', 'DNS_LOOKUP_FAILED'],
++			['EAI_AGAIN', 'DNS_LOOKUP_FAILED'], ['ENETUNREACH', 'NETWORK_UNREACHABLE'],
++			['EHOSTUNREACH', 'NETWORK_UNREACHABLE'], [CANARY, undefined]
++		]) {
++			logger.error({ err: Object.assign(new Error(CANARY), { code, hostname: CANARY }) }, 'error in RPC request')
++			const record = JSON.parse(lines.at(-1)!)
++			assert.equal(record.stage, 'rpc')
++			assert.equal(record.outcome, 'failure')
++			assert.equal(record.errorCode, 'INTERNAL_ERROR')
++			assert.equal(record.reason, reason)
++		}
++
++		logger.error({ err: new DOMException(CANARY, 'InvalidStateError') }, 'error in RPC request')
++		assert.equal(JSON.parse(lines.at(-1)!).reason, 'INVALID_STATE')
++		assert.ok(!lines.join('').includes(CANARY))
++	} finally {
++		makeLogger(false, 'info')
++	}
++})
++
++it('reconnects and resubscribes using the real Node WebSocket against a loopback feed', async() => {
++	const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
++	await new Promise<void>(resolve => server.once('listening', resolve))
++	const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}`
++	const { logger, lines } = capture()
++	let listener: ReturnType<typeof createBgpListener> | undefined
++	let subscriptions = 0
++	let overlaps = 0
++	server.on('connection', socket => socket.on('message', value => {
++		assert.deepEqual(JSON.parse(value.toString()), { type: 'ris_subscribe', data: { type: 'UPDATE' } })
++		subscriptions++
++		if(subscriptions === 1) socket.terminate()
++		else socket.send(JSON.stringify({ data: { path: ['test'], announcements: [{ prefixes: ['203.0.113.0/24'] }] } }))
++	}))
++	try {
++		socketFactory = () => new NativeWebSocket(url)
++		listener = createBgpListener(logger)
++		listener.onOverlap(['203.0.113.7'], () => overlaps++)
++		const deadline = Date.now() + 5_000
++		while(overlaps === 0 && Date.now() < deadline) await delay(20)
++		assert.equal(subscriptions, 2)
++		assert.equal(overlaps, 1)
++		assert.ok(lines.map(line => JSON.parse(line)).every(record => record.stage === 'bgp'))
++	} finally {
++		listener?.close()
++		socketFactory = url => new NativeWebSocket(url)
++		for(const socket of server.clients) socket.terminate()
++		await new Promise<void>(resolve => server.close(() => resolve()))
++		makeLogger(false, 'info')
++	}
++})
++
++// A subprocess timeout bounds this regression even if the vulnerable parser returns.
++it('rejects oversized IPv6 zone identifiers without blocking the process', () => {
++	const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
++		import assert from 'node:assert/strict'
++		import { Address6 } from 'ip-address'
++		const input = 'fe80::1' + '%'.repeat(1_000_000) + '\\n'
++		assert.throws(() => new Address6(input))
++		assert.equal(Address6.isValid(input), false)
++	`], { timeout: 5_000, encoding: 'utf8', cwd: new URL('../../', import.meta.url) })
++	assert.ifError(child.error)
++	assert.equal(child.status, 0, child.stderr)
++})

@@ -4,7 +4,8 @@ import { AttestorError } from '#src/utils/index.ts'
 
 const MAGIC = Buffer.from('UMIA_STWO_ZLIB_V1\0')
 const MAX_PROOF_BYTES = 4 * 1024 * 1024
-const MAX_TOTAL_PROOF_BYTES = 32 * 1024 * 1024
+// Compressed claims may fit the 32 MiB wire cap while restoring more proof bytes.
+const MAX_TOTAL_PROOF_BYTES = 64 * 1024 * 1024
 
 /** Called only after the signed request has been verified. */
 export function restoreStwoProofs(request: ClaimTunnelRequest) {

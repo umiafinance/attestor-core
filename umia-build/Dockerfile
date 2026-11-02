@@ -32,10 +32,18 @@ RUN cp node_modules/@reclaimprotocol/zk-symmetric-crypto/lib/stwo/s2circuits_bg.
       node_modules/@reclaimprotocol/zk-symmetric-crypto/resources/stwo/s2circuits_bg.wasm \
       | sha256sum --check
 RUN npm run build:browser
-RUN npm prune --production
+RUN npm prune --omit=dev
 
 # The base image's unprivileged user; the server only reads /app at runtime.
 USER node
+# Only the final source layer requires the native engine after production pruning.
+RUN node --input-type=module -e "\
+    import { readFileSync } from 'node:fs'; \
+    const manifest = JSON.parse(readFileSync('umia-source-manifest.json', 'utf8')); \
+    if (manifest.patches.some(({ file }) => file === 'attestor-telemetry.patch')) { \
+      const { default: RE2 } = await import('re2'); \
+      if (new RE2('test').constructor.name !== 'RE2') throw new Error('RE2 unavailable'); \
+    }"
 
 CMD ["npm", "run", "start"]
 EXPOSE 8001

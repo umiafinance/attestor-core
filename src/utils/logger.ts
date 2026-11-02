@@ -2,19 +2,21 @@ import { type Bindings, type ChildLoggerOptions, type DestinationStream, type Lo
 
 import type { LogLevel } from '#src/types/index.ts'
 import { ErrorCode } from '#src/proto/api.ts'
+import { diagnosticEvent, diagnosticReason, type DiagnosticReason, isDiagnosticReason } from '#src/utils/diagnostic-events.ts'
 import { getEnvVariable } from '#src/utils/env.ts'
 import { AttestorError } from '#src/utils/error.ts'
 import { REJECTION_REASONS, type RejectionReason, rejectionReason } from '#src/utils/rejection-reason.ts'
 
-const STAGES = ['connection', 'init', 'rpc', 'tunnel', 'claimTunnel', 'claimTeeBundle', 'provider', 'tee'] as const
+const STAGES = ['connection', 'init', 'rpc', 'tunnel', 'claimTunnel', 'claimTeeBundle', 'provider', 'tee', 'bgp'] as const
 const OUTCOMES = ['started', 'success', 'failure', 'timeout', 'expired'] as const
 const HANDLERS = ['claimTunnel', 'claimTeeBundle'] as const
 type Stage = typeof STAGES[number]
 type Outcome = typeof OUTCOMES[number]
 type Handler = typeof HANDLERS[number]
 type SafeErrorCode = keyof typeof ErrorCode | 'INTERNAL_ERROR'
-type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode, reason?: RejectionReason }
-const EVENTS: Record<string, { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode }> = {
+type SafeEvidence = { durationMs?: number, errorCode?: SafeErrorCode, reason?: RejectionReason | DiagnosticReason }
+type LogEvent = { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode, reason?: RejectionReason | DiagnosticReason }
+const EVENTS: Record<string, LogEvent> = {
 	'new connection, validating...': { stage: 'connection', outcome: 'started' },
 	'connection accepted': { stage: 'connection', outcome: 'success' },
 	'error in new connection': { stage: 'init', outcome: 'failure' },
@@ -109,9 +111,10 @@ export function makeLogger(
 					const message = args.find(arg => typeof arg === 'string')
 					const details = args.find(arg => typeof arg === 'object' && arg !== null)
 					const evidence = projectEvidence(details)
-					const event: { stage: Stage, outcome: Outcome, errorCode?: SafeErrorCode } = typeof message === 'string' && Object.hasOwn(EVENTS, message)
-						? EVENTS[message]
-						: { stage: 'rpc', outcome: evidence.errorCode || levelNumber >= 40 ? 'failure' : 'started' }
+					const event: LogEvent = diagnosticEvent(details && 'event' in details ? details.event : undefined)
+						?? (typeof message === 'string' && Object.hasOwn(EVENTS, message)
+							? EVENTS[message]
+							: { stage: 'rpc', outcome: evidence.errorCode || levelNumber >= 40 ? 'failure' : 'started' })
 					if(event.outcome === 'success' || event.outcome === 'started') {
 						delete evidence.errorCode
 						delete evidence.reason
@@ -218,7 +221,7 @@ function projectEvidence(input: unknown): SafeEvidence {
 }
 
 function errorEvidence(err: unknown): SafeEvidence {
-	const reason = rejectionReason(err)
+	const reason = rejectionReason(err) ?? diagnosticReason(err)
 	return reason ? { errorCode: safeErrorCode(err), reason } : { errorCode: safeErrorCode(err) }
 }
 
@@ -230,7 +233,7 @@ export function redact(input: unknown): Record<string, unknown> {
 		if(typeof value.stage === 'string' && STAGES.includes(value.stage as Stage)) safe.stage = value.stage
 		if(typeof value.outcome === 'string' && OUTCOMES.includes(value.outcome as Outcome)) safe.outcome = value.outcome
 		if(typeof value.errorCode === 'string' && (value.errorCode === 'INTERNAL_ERROR' || Object.hasOwn(ErrorCode, value.errorCode))) safe.errorCode = value.errorCode
-		if(typeof value.reason === 'string' && Object.hasOwn(REJECTION_REASONS, value.reason)) safe.reason = value.reason
+		if(typeof value.reason === 'string' && (Object.hasOwn(REJECTION_REASONS, value.reason) || isDiagnosticReason(value.reason))) safe.reason = value.reason
 		return safe
 	} catch {
 		return {}

@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process'
 import { after, describe, it, mock } from 'node:test'
 import { Wallet } from 'ethers'
 
+import { hashProviderParams } from '#src/utils/claims.ts'
+
 import { CERTIFICATE_TRUST_REASONS } from '#src/tests/utils/certificate-trust-reasons.ts'
 import { inputContext, signedContext, TEST_CHAIN_IDS, TEST_CONTEXT_ADDRESS, TEST_IDENTITY_PROVIDER, TEST_SESSION_ID, testAuthIdentity } from '#src/tests/utils/claim-context.ts'
 import { SEC_HARDENING_REASONS } from '#src/tests/utils/sec-hardening-reasons.ts'
@@ -230,7 +232,7 @@ describe('finite rejection reasons', () => {
 		handshake = () => ({ tlsVersion: 'TLS1_3', cipherSuite: 'TLS_CHACHA20_POLY1305_SHA256', hostname: 'example.com', nextMsgIndex: 0 })
 		const schemaInvalid = await signedClaimRequest(owner, '{"url":"https://example.com/"}')
 		await expectReason('PROVIDER_PARAMS_INVALID', 'ERROR_BAD_REQUEST', () => assertValidClaimRequest(schemaInvalid, metadata, logger))
-		await expectReason('PROVIDER_VALIDATION_FAILED', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(signed, metadata, logger))
+		await expectReason('PROVIDER_VALIDATION_FAILED', 'ERROR_INVALID_CLAIM', () => assertValidClaimRequest(signed, metadata, logger, [hashProviderParams(JSON.parse(signed.data!.parameters))]))
 	})
 
 	it('projects only known reasons into logs', () => {

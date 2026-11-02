@@ -1,15 +1,8 @@
-import assert from 'node:assert'
+import assert from 'node:assert/strict'
 import { it, mock } from 'node:test'
 
 mock.module('re2', { defaultExport: undefined })
 
-it('compiles RE2-compatible response patterns with the native fallback', async() => {
-	const { makeRegex } = await import('#src/providers/http/utils.ts')
-	const regexp = makeRegex('(?<total_content_views>.*?}]}})')
-
-	assert.equal(regexp.constructor.name, 'RegExp')
-	assert.equal(
-		regexp.exec('123}]}}')?.groups?.total_content_views,
-		'123}]}}'
-	)
+it('refuses to load the HTTP provider when RE2 is unavailable', async() => {
+	await assert.rejects(import('#src/providers/http/utils.ts'), /RE2 is required/)
 })

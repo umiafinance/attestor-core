@@ -106,20 +106,18 @@
     "esprima-next": "^5.8.4",
     "ethers": "^6.17.0",
     "https-proxy-agent": "^7.0.6",
-    "ip-address": "^10.7.3",
+    "ip-address": "^10.7.4",
     "jsonpath-plus": "^10.4.0",
     "koffi": "^2.15.2",
     "p-queue": "^8.1.1",
     "parse5": "^8.0.0",
     "parse5-htmlparser2-tree-adapter": "^8.0.0",
     "pino": "^9.14.0",
+    "re2": "^1.27.0",
     "serve-static": "^1.16.3",
     "snarkjs": "^0.7.6",
     "ws": "^8.21.0",
     "xpath": "^0.0.34"
-  },
-  "optionalDependencies": {
-    "re2": "*"
   },
   "devDependencies": {
     "@adiwajshing/eslint-config": "github:adiwajshing/eslint-config",
@@ -138,7 +136,6 @@
     "eslint-plugin-no-relative-import-paths": "^1.6.1",
     "event-target-shim": "^6.0.2",
     "json-schema-to-typescript": "^15.0.4",
-    "re2": "^1.24.0",
     "ts-jest": "^29.4.6",
     "ts-proto": "^2.11.6",
     "tsc-alias": "^1.8.17",
@@ -150,9 +147,12 @@
   "overrides": {
     "elliptic": "^6.6.1",
     "underscore": "^1.13.8",
-    "fast-uri": "^3.1.8",
-    "filelist": {
-      "brace-expansion": "^2.1.7"
+    "fast-uri": "^3.1.9",
+    "jake": {
+      "filelist": {
+        ".": "2.0.2",
+        "minimatch": "11.0.1"
+      }
     }
   }
 }

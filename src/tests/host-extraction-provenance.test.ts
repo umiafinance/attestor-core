@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { it, mock } from 'node:test'
 
+import { hashProviderParams } from '#src/utils/claims.ts'
 import { providers } from '#src/providers/index.ts'
 import { assertValidProviderTranscript } from '#src/server/utils/assert-valid-claim-request.ts'
 import { assertSupportedInputContext, assertSupportedSignedContext } from '#src/server/utils/claim-context-policy.ts'
@@ -26,7 +27,7 @@ it('requires nonempty mocked provider extraction through real context mutation',
 	try {
 		const result = await assertValidProviderTranscript(
 			[], { clientVersion: 1 } as any, claim() as any,
-			logger as any, { version: 1 } as any
+			logger as any, { version: 1 } as any, undefined, [hashProviderParams(JSON.parse(parameters))]
 		)
 		assert.equal(receipt.mock.calls.length, 1)
 		const hash = JSON.parse(result.context).providerHash as string
@@ -43,7 +44,7 @@ it('requires nonempty mocked provider extraction through real context mutation',
 	try {
 		const result = await assertValidProviderTranscript(
 			[], { clientVersion: 1 } as any, claim() as any,
-			logger as any, { version: 1 } as any
+			logger as any, { version: 1 } as any, undefined, [hashProviderParams(JSON.parse(parameters))]
 		)
 		assert.equal(emptyReceipt.mock.calls.length, 1)
 		assert.equal(Object.hasOwn(JSON.parse(result.context), 'extractedParameters'), false)
