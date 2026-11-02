@@ -9,6 +9,7 @@
     },
     {
       "layer": "auth",
+      "imageTagSuffix": "epoch-auth",
       "file": "auth-lifetime.patch",
       "sha256": "b8882c98acbc624e42224aa875634542558c277c1866843450ab10131175acee",
       "tests": [
@@ -21,12 +22,14 @@
     },
     {
       "layer": "log",
+      "imageTagSuffix": "epoch-auth-log",
       "file": "log-privacy.patch",
       "sha256": "5757539434e9a4f4425d46784e280af698c673032c36ba1d36944223b14891ce",
       "tests": ["apm-log-privacy.test.ts", "log-privacy.test.ts"]
     },
     {
       "layer": "host",
+      "imageTagSuffix": "epoch-auth-log-host",
       "file": "host-policy.patch",
       "sha256": "13f0e46224c8b04e4854ab3dafbbbc88ff53f2c869749938736f26307f560c63",
       "tests": [
@@ -42,6 +45,7 @@
     },
     {
       "layer": "deps",
+      "imageTagSuffix": "epoch-auth-log-host-deps",
       "file": "dependency-remediation.patch",
       "sha256": "1bdc51c0bde7e2c54aa819747f3813970b0415c7aa4f54c5f825e0561ef9f973",
       "tests": [
@@ -69,7 +73,7 @@
     {
       "layer": "hardening",
       "file": "sec-hardening.patch",
-      "sha256": "0d5eba781b91f1c98619ddc113874dc079c484b5b904411c6b0384105d8e171f",
+      "sha256": "2314ad1ea2e113646f1eaa27adb16caf17b108e51a98c273890f9b94d52f36b5",
       "tests": ["sec-hardening.test.ts", "stwo-proof-compression.test.ts"],
       "packageSha256": "ec869ed2a716a865097a0e2e9c391f179caec3c9e74d300133c5630f6834c8aa",
       "packageLockSha256": "aaf7636ce4989bee1958a9a6afc955f75f8e9aea62f7637c31bdcdd76968ef64"
@@ -83,12 +87,18 @@
       "packageLockSha256": "71620f569196b1c9ca46df83d14c4568bf398c501877ebebb8312c18eea3f3a3"
     },
     {
+      "layer": "bgp",
+      "file": "bgp-reconnect.patch",
+      "sha256": "59ddde8f418c33a89c7739db3615d917724dc6286cc485d4c4995f0581be745d",
+      "tests": ["bgp-listener.test.ts", "bgp-reconnect.test.ts"]
+    },
+    {
       "layer": "final",
       "file": "attestor-telemetry.patch",
-      "sha256": "408cf3ca7914d674537d44c1d6af7aa1703b05ace3880a7800d260ffc713b66e",
-      "tests": ["attestor-telemetry.test.ts"],
-      "packageSha256": "cca8875344494faa234980892738091043759020a35906d2f0b5146592ac59e5",
-      "packageLockSha256": "37d8fbfd8161efee72a83d25b6bedc07f430f06be2dea0fb6dca03733105a95f"
+      "sha256": "e13275407119449a9c73180e4d92acaa482492b340a4e3603c5646d1f4ca81be",
+      "tests": ["attestor-telemetry.test.ts", "regex-safety.test.ts", "http-regex.test.ts"],
+      "packageSha256": "b7b08559bbea6bf633546c5eaca956a5ddda4ead01fe56d0f5502832b9a19386",
+      "packageLockSha256": "8faf13f1f9ab7bd0f5d97b133f2c175a4711580404ef8d7753cd145d1ce2eed8"
     }
   ]
 }

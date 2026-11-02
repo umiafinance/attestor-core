@@ -29,3 +29,42 @@ it('rejects compressed proofs for another engine and bounded decompression', () 
 	assert.throws(() => restoreStwoProofs(request(encoded)))
 	assert.throws(() => restoreStwoProofs(request(Buffer.concat([magic, new Uint8Array([1, 2, 3])]))))
 })
+
+
+it('admits an Echo-sized compressed transcript above the former 32 MiB inflated limit', () => {
+	// Synthetic bytes only: same total and maximum as the client diagnostic;
+	// this exercises admission, not proof verification or a real Echo capture.
+	const sizes = [...Array(28).fill(1_473_373), 1_201_077]
+	assert.equal(sizes.reduce((total, size) => total + size, 0), 42_455_521)
+	const claim = ClaimTunnelRequest.create({
+		zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
+		transcript: sizes.map(size => ({ reveal: { zkReveal: { proofs: [{
+			proofData: Buffer.concat([magic, deflateSync(new Uint8Array(size).fill(0x41))])
+		}] } } }))
+	})
+	restoreStwoProofs(claim)
+	assert.deepEqual(claim.transcript.map(packet => packet.reveal?.zkReveal?.proofs[0].proofData.length), sizes)
+})
+
+it('bounds cumulative inflated bytes across packets, including mixed compressed and raw proofs', () => {
+	const raw = new Uint8Array(4 * 1024 * 1024).fill(0x41)
+	const encoded = Buffer.concat([magic, deflateSync(raw)])
+	for(const compressed of [false, true]) {
+		const claim = ClaimTunnelRequest.create({
+			zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
+			transcript: Array.from({ length: 16 }, (_, index) => ({
+				reveal: { zkReveal: { proofs: [{ proofData: compressed && index % 2 ? encoded : raw }] } }
+			}))
+		})
+		// Exactly 64 MiB fits; the next byte in a separate packet must fail.
+		restoreStwoProofs(claim)
+		claim.transcript.push(ClaimTunnelRequest.create({
+			transcript: [{ reveal: { zkReveal: { proofs: [{ proofData: new Uint8Array(1) }] } } }]
+		}).transcript[0])
+		assert.throws(() => restoreStwoProofs(claim), /Total proof bytes too large/)
+	}
+})
+
+it('keeps the individual raw proof limit at 4 MiB', () => {
+	assert.throws(() => restoreStwoProofs(request(new Uint8Array(4 * 1024 * 1024 + 1))), /Proof too large/)
+})

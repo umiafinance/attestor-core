@@ -3,9 +3,12 @@ import type { Logger } from 'pino'
 
 import { BGP_WS_URL } from '#src/config/index.ts'
 import type { BGPAnnouncementOverlapData, BGPListener } from '#src/types/index.ts'
+import { BGP_EVENTS } from '#src/utils/diagnostic-events.ts'
 import { makeWebSocket } from '#src/utils/ws.ts'
 
 const ANNOUNCEMENT_OVERLAP = 'announcement-overlap'
+const RECONNECT_MIN_MS = 1_000
+const RECONNECT_MAX_MS = 30_000
 
 class BGPAnnouncementOverlapEvent extends Event {
 
@@ -22,8 +25,10 @@ class BGPAnnouncementOverlapEvent extends Event {
  * an announcement overlaps with a target IP.
  */
 export function createBgpListener(logger: Logger): BGPListener {
-	let ws: ReturnType<typeof makeWebSocket>
+	let ws: ReturnType<typeof makeWebSocket> | undefined
 	let closed = false
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+	let reconnectDelay = RECONNECT_MIN_MS
 
 	const targetIps = new Set<string>()
 	const eventTarget = new EventTarget()
@@ -57,61 +62,111 @@ export function createBgpListener(logger: Logger): BGPListener {
 			}
 		},
 		close() {
-			ws.onclose = null
-			ws.onerror = null
-			ws.close()
+			// Invalidate callbacks before closing; close/error may already be queued.
 			closed = true
+			clearTimeout(reconnectTimer)
+			reconnectTimer = undefined
+			const socket = ws
+			ws = undefined
+			if(socket) retire(socket)
 		}
 	}
 
-	function openWs() {
-		logger.debug('connecting to BGP websocket')
+	function openWs(): void {
+		if(closed) return
+		logger.debug({ event: BGP_EVENTS.connecting })
 
-		ws = makeWebSocket(BGP_WS_URL)
-		ws.onopen = onOpen
-		ws.onerror = (ev) => onClose(ev)
-		ws.onclose = () => onClose(new Error('Unexpected close'))
-		ws.onmessage = ({ data }) => {
-			const str = typeof data === 'string' ? data : data.toString()
+		let socket: ReturnType<typeof makeWebSocket>
+		try {
+			socket = makeWebSocket(BGP_WS_URL)
+		} catch(err) {
+			logger.warn({ event: BGP_EVENTS.connectFailed, err })
+			scheduleReconnect()
+			return
+		}
+
+		ws = socket
+		socket.onopen = () => {
+			if(!isCurrent()) return
+			// Always send through the socket that owns this callback.
+			if(socket.readyState !== WebSocket.OPEN) {
+				logger.warn({ event: BGP_EVENTS.notOpen })
+				onClose()
+				return
+			}
+
 			try {
+				socket.send(JSON.stringify({ type: 'ris_subscribe', data: { type: 'UPDATE' } }))
+			} catch(err) {
+				logger.warn({ event: BGP_EVENTS.subscribeFailed, err })
+				onClose()
+				return
+			}
+
+			reconnectDelay = RECONNECT_MIN_MS
+			logger.info({ event: BGP_EVENTS.connected })
+		}
+		socket.onerror = () => {
+			if(!isCurrent()) return
+			logger.warn({ event: BGP_EVENTS.connectionError })
+			onClose()
+		}
+		socket.onclose = () => {
+			if(!isCurrent()) return
+			logger.warn({ event: BGP_EVENTS.closed })
+			onClose()
+		}
+		socket.onmessage = ({ data }) => {
+			if(!isCurrent()) return
+			try {
+				const str = typeof data === 'string' ? data : data.toString()
 				onMessage(str)
 			} catch(err) {
-				logger.error({ data, err }, 'error processing BGP message')
+				logger.error({ event: BGP_EVENTS.messageInvalid, err })
 			}
 		}
+
+		function isCurrent(): boolean {
+			return !closed && ws === socket
+		}
+
+		function onClose(): void {
+			if(!isCurrent()) return
+			// error followed by close (or any queued callback) retires only once.
+			ws = undefined
+			retire(socket)
+			scheduleReconnect()
+		}
 	}
 
-	function onOpen(): void {
-		const subscriptionMessage = {
-			type: 'ris_subscribe',
-			data: {
-				type: 'UPDATE',
-			},
+	function retire(socket: ReturnType<typeof makeWebSocket>): void {
+		socket.onopen = null
+		socket.onmessage = null
+		socket.onerror = null
+		socket.onclose = null
+		try {
+			socket.close()
+		} catch(err) {
+			logger.warn({ event: BGP_EVENTS.closeFailed, err })
 		}
-		ws.send(JSON.stringify(subscriptionMessage))
-
-		logger.info('connected to BGP websocket')
 	}
 
-	function onClose(err?: Error | Event) {
-		if(closed) {
-			return
-		}
-
-		logger.info({ err }, 'BGP websocket closed')
-		if(!err) {
-			return
-		}
-
-		logger.info('reconnecting to BGP websocket')
-		openWs()
+	function scheduleReconnect(): void {
+		if(closed || reconnectTimer !== undefined) return
+		logger.info({ event: BGP_EVENTS.reconnecting })
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = undefined
+			openWs()
+		}, reconnectDelay)
+		reconnectTimer.unref()
+		reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
 	}
 
 	function onMessage(message: string): void {
 		const data = JSON.parse(message)
 		const announcements = data?.data?.announcements
 
-		logger.trace({ data }, 'got BGP update')
+		logger.trace({ event: BGP_EVENTS.update })
 
 		if(!Array.isArray(announcements)) {
 			return

@@ -62,6 +62,7 @@ describe('BGP Listener', () => {
 let mockWs: MockWS
 
 class MockWS {
+	readyState = WebSocket.OPEN
 	constructor() {}
 	onopen: () => void
 	onmessage: (msg: MessageEvent) => void

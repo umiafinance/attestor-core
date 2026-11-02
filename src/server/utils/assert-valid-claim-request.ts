@@ -54,6 +54,7 @@ export async function assertValidClaimRequest(
 	request: ClaimTunnelRequest,
 	metadata: InitRequest,
 	logger: Logger,
+	allowedHashes: readonly string[] = [],
 ) {
 	const {
 		data,
@@ -113,7 +114,8 @@ export async function assertValidClaimRequest(
 			data,
 			logger,
 			{ version: metadata.clientVersion },
-			receipt.oprfRawReplacements
+			receipt.oprfRawReplacements,
+			allowedHashes
 		)
 	} catch(err) {
 		throw withRejectionReason(err, 'PROVIDER_VALIDATION_FAILED')
@@ -135,7 +137,8 @@ export async function assertValidProviderTranscript<T extends ProviderClaimInfo>
 	info: T,
 	logger: Logger,
 	providerCtx: ProviderCtx,
-	oprfRawReplacements?: OPRFRawReplacement[]
+	oprfRawReplacements?: OPRFRawReplacement[],
+	allowedHashes: readonly string[] = []
 ) {
 	const providerName = info.provider as ProviderName
 	const provider = providers[providerName]
@@ -171,6 +174,13 @@ export async function assertValidProviderTranscript<T extends ProviderClaimInfo>
 		throw withRejectionReason(err, 'PROVIDER_PARAMS_INVALID', 'ERROR_BAD_REQUEST')
 	}
 
+	// Hash the same schema-validated, OPRF-replaced parameters used in the signed
+	// context. Authorize them before the provider can evaluate response rules.
+	const providerHash = hashProviderParams(params)
+	if(!allowedHashes.includes(providerHash)) {
+		throw rejection('ERROR_BAD_REQUEST', 'PROVIDER_PARAMS_INVALID', 'Provider parameters not allowed by auth request')
+	}
+
 	const rslt = await provider.assertValidProviderReceipt({
 		clientVersion: metadata.clientVersion,
 		receipt: applData,
@@ -179,7 +189,7 @@ export async function assertValidProviderTranscript<T extends ProviderClaimInfo>
 		ctx: providerCtx
 	})
 
-	ctx.providerHash = hashProviderParams(params)
+	ctx.providerHash = providerHash
 
 	const extractedParameters = rslt?.extractedParameters || {}
 	if(Object.keys(extractedParameters).length) {

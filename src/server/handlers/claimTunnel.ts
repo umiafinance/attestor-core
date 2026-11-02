@@ -84,7 +84,8 @@ export const claimTunnel: RPCHandler<'claimTunnel'> = async(
 			const claim = await assertValidClaimRequest(
 				claimRequest,
 				client.metadata,
-				logger
+				logger,
+				inputContext.allowedHashes
 			)
 			res.claim = {
 				...claim,
