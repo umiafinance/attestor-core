@@ -10,6 +10,7 @@ import type {
 import { ClaimTunnelRequest, TranscriptMessageSenderType } from '#src/proto/api.ts'
 import { providers } from '#src/providers/index.ts'
 import { niceParseJsonObject } from '#src/server/utils/generics.ts'
+import { assertRecipeBoundIdentity } from '#src/server/utils/identity-binding.ts'
 import { computeOPRFRaw } from '#src/server/utils/oprf-raw.ts'
 import { processHandshake } from '#src/server/utils/process-handshake.ts'
 import { assertValidateProviderParams } from '#src/server/utils/validation.ts'
@@ -106,6 +107,8 @@ export async function assertValidClaimRequest(
 
 	// get all application data messages
 	const applData = extractApplicationDataFromTranscript(receipt)
+	// Provider validation rewrites these with oprf-raw nullifiers.
+	const parameters = data.parameters
 	let newData: typeof data
 	try {
 		newData = await assertValidProviderTranscript(
@@ -120,6 +123,8 @@ export async function assertValidClaimRequest(
 	} catch(err) {
 		throw withRejectionReason(err, 'PROVIDER_VALIDATION_FAILED')
 	}
+
+	await assertRecipeBoundIdentity(parameters, newData.context, receipt, metadata, logger)
 	if(newData !== data) {
 		logger.info({ newData }, 'updated claim info')
 	}
@@ -270,6 +275,7 @@ export async function decryptTranscript(
 
 	const overshotMap: { [pkt: number]: { data: Uint8Array } } = {}
 	const decryptedTranscript: IDecryptedTranscriptMessage[] = []
+	const originalTranscript: IDecryptedTranscriptMessage[] = []
 	const oprfRawReplacements: { originalText: string, nullifierText: string }[] = []
 	// Track pending oprf-raw markers that span multiple packets
 	// keyed by packet index that will receive the overshot data
@@ -314,6 +320,7 @@ export async function decryptTranscript(
 
 	return {
 		transcript: decryptedTranscript,
+		originalTranscript,
 		hostname: hostname,
 		tlsVersion: tlsVersion,
 		oprfRawReplacements: oprfRawReplacements.length ? oprfRawReplacements : undefined
@@ -338,6 +345,7 @@ export async function decryptTranscript(
 
 		let redacted = true
 		let plaintext: Uint8Array | undefined = undefined
+		let originalPlaintext: Uint8Array | undefined = undefined
 		let plaintextLength: number
 
 		if(directReveal?.key?.length) {
@@ -379,6 +387,8 @@ export async function decryptTranscript(
 				}
 			)
 			plaintext = result.redactedPlaintext
+			// oprf-raw below overwrites this packet, and a later one may overwrite its tail.
+			originalPlaintext = plaintext.slice()
 
 			// Handle pending oprf-raw data from previous packet (cross-block)
 			const pendingForThis = pendingOprfRaw[i]
@@ -504,6 +514,10 @@ export async function decryptTranscript(
 			message: plaintext,
 			recordHeader,
 			plaintextLength,
+		})
+		originalTranscript.push({
+			...decryptedTranscript[decryptedTranscript.length - 1],
+			message: originalPlaintext ?? plaintext
 		})
 	}
 }
