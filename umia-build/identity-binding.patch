@@ -1,0 +1,701 @@
+diff --git a/src/server/utils/assert-valid-claim-request.ts b/src/server/utils/assert-valid-claim-request.ts
+index c1f7b9052..2966c5b0b 100644
+--- a/src/server/utils/assert-valid-claim-request.ts
++++ b/src/server/utils/assert-valid-claim-request.ts
+@@ -10,6 +10,7 @@ import type {
+ import { ClaimTunnelRequest, TranscriptMessageSenderType } from '#src/proto/api.ts'
+ import { providers } from '#src/providers/index.ts'
+ import { niceParseJsonObject } from '#src/server/utils/generics.ts'
++import { assertRecipeBoundIdentity } from '#src/server/utils/identity-binding.ts'
+ import { computeOPRFRaw } from '#src/server/utils/oprf-raw.ts'
+ import { processHandshake } from '#src/server/utils/process-handshake.ts'
+ import { assertValidateProviderParams } from '#src/server/utils/validation.ts'
+@@ -105,6 +106,8 @@ export async function assertValidClaimRequest(
+ 
+ 	// get all application data messages
+ 	const applData = extractApplicationDataFromTranscript(receipt)
++	// Provider validation rewrites these with oprf-raw nullifiers.
++	const parameters = data.parameters
+ 	let newData: typeof data
+ 	try {
+ 		newData = await assertValidProviderTranscript(
+@@ -118,6 +121,8 @@ export async function assertValidClaimRequest(
+ 	} catch(err) {
+ 		throw withRejectionReason(err, 'PROVIDER_VALIDATION_FAILED')
+ 	}
++
++	await assertRecipeBoundIdentity(parameters, newData.context, receipt, metadata, logger)
+ 	if(newData !== data) {
+ 		logger.info({ newData }, 'updated claim info')
+ 	}
+@@ -260,6 +265,7 @@ export async function decryptTranscript(
+ 
+ 	const overshotMap: { [pkt: number]: { data: Uint8Array } } = {}
+ 	const decryptedTranscript: IDecryptedTranscriptMessage[] = []
++	const originalTranscript: IDecryptedTranscriptMessage[] = []
+ 	const oprfRawReplacements: { originalText: string, nullifierText: string }[] = []
+ 	// Track pending oprf-raw markers that span multiple packets
+ 	// keyed by packet index that will receive the overshot data
+@@ -304,6 +310,7 @@ export async function decryptTranscript(
+ 
+ 	return {
+ 		transcript: decryptedTranscript,
++		originalTranscript,
+ 		hostname: hostname,
+ 		tlsVersion: tlsVersion,
+ 		oprfRawReplacements: oprfRawReplacements.length ? oprfRawReplacements : undefined
+@@ -328,6 +335,7 @@ export async function decryptTranscript(
+ 
+ 		let redacted = true
+ 		let plaintext: Uint8Array | undefined = undefined
++		let originalPlaintext: Uint8Array | undefined = undefined
+ 		let plaintextLength: number
+ 
+ 		if(directReveal?.key?.length) {
+@@ -369,6 +377,8 @@ export async function decryptTranscript(
+ 				}
+ 			)
+ 			plaintext = result.redactedPlaintext
++			// oprf-raw below overwrites this packet, and a later one may overwrite its tail.
++			originalPlaintext = plaintext.slice()
+ 
+ 			// Handle pending oprf-raw data from previous packet (cross-block)
+ 			const pendingForThis = pendingOprfRaw[i]
+@@ -495,6 +505,10 @@ export async function decryptTranscript(
+ 			recordHeader,
+ 			plaintextLength,
+ 		})
++		originalTranscript.push({
++			...decryptedTranscript[decryptedTranscript.length - 1],
++			message: originalPlaintext ?? plaintext
++		})
+ 	}
+ }
+ 
+diff --git a/src/server/utils/identity-binding.ts b/src/server/utils/identity-binding.ts
+new file mode 100644
+index 000000000..958d6a28f
+--- /dev/null
++++ b/src/server/utils/identity-binding.ts
+@@ -0,0 +1,142 @@
++import type { InitRequest } from '#src/proto/api.ts'
++import { providers } from '#src/providers/index.ts'
++import { niceParseJsonObject } from '#src/server/utils/generics.ts'
++import type { IDecryptedTranscript, Logger, ProviderParams } from '#src/types/index.ts'
++import { extractApplicationDataFromTranscript, REDACTION_CHAR } from '#src/utils/index.ts'
++import { rejection, withRejectionReason } from '#src/utils/rejection-reason.ts'
++
++const CAPTURE_NAME = /\(\?<(?![=!])([^>]*)>/g
++const PLACEHOLDER = /\{\{([^{}]+)\}\}/g
++
++type HttpParams = ProviderParams<'http'>
++type IdentityCapture = { key: string, regex: string }
++
++/**
++ * Every oprf-raw capture of the recipe must be signed as the nullifier of its whole revealed value,
++ * read from the response before replacement, with exactly one marker per capture. The other signed
++ * keys must be values the recipe can produce; secret templates never are.
++ */
++export async function assertRecipeBoundIdentity(
++	parameters: string,
++	signedContext: string,
++	decrypted: IDecryptedTranscript,
++	metadata: InitRequest,
++	logger: Logger
++) {
++	const params: HttpParams = niceParseJsonObject(parameters, 'params')
++	// Their template values reach extractedParameters, yet nothing compares them to the tunnel.
++	if(params.geoLocation || params.proxySessionId) {
++		throw rejection('ERROR_BAD_REQUEST', 'PROVIDER_PARAMS_INVALID', 'Claim parameters cannot route the request')
++	}
++
++	const identity = recipeIdentityCaptures(params)
++	const extracted: { [key: string]: unknown } = niceParseJsonObject(signedContext, 'context')
++		.extractedParameters ?? {}
++	const signable = recipeSignedKeys(params, identity)
++	for(const key of Object.keys(extracted)) {
++		if(!signable.has(key) || key.toLowerCase().includes('secret')) {
++			throw unbound(`Extracted parameter ${key} is not a value the recipe produces`)
++		}
++	}
++
++	const replacements = decrypted.oprfRawReplacements ?? []
++	if(replacements.length !== identity.length) {
++		throw unbound(`Expected ${identity.length} oprf-raw markers for the recipe identity captures, got ${replacements.length}`)
++	}
++
++	if(!identity.length) {
++		return
++	}
++
++	let captures: { [key: string]: string }
++	try {
++		const result = await providers.http.assertValidProviderReceipt({
++			clientVersion: metadata.clientVersion,
++			receipt: extractApplicationDataFromTranscript({ ...decrypted, transcript: decrypted.originalTranscript }),
++			params: {
++				...params,
++				responseMatches: identity.map(({ regex }) => ({ type: 'regex' as const, value: regex }))
++			},
++			logger,
++			ctx: { version: metadata.clientVersion }
++		})
++		captures = result?.extractedParameters ?? {}
++	} catch(err) {
++		throw withRejectionReason(err, 'SIGNED_CONTEXT_INVALID', 'ERROR_BAD_REQUEST')
++	}
++
++	const unmatched = [...replacements]
++	for(const { key } of identity) {
++		const capture = captures[key]
++		if(!capture) {
++			throw unbound(`Recipe capture ${key} is absent from the response`)
++		}
++
++		// Undisclosed bytes are revealed as the redaction character; hashing them splits the account.
++		if(capture.includes(REDACTION_CHAR)) {
++			throw unbound(`Recipe capture ${key} is not fully revealed`)
++		}
++
++		const index = unmatched.findIndex(({ originalText, nullifierText }) => (
++			originalText === capture && nullifierText === extracted[key]
++		))
++		if(index < 0) {
++			throw unbound(`Identity ${key} is not the nullifier of its whole recipe capture`)
++		}
++
++		unmatched.splice(index, 1)
++	}
++}
++
++function recipeIdentityCaptures(params: HttpParams) {
++	const captures: IdentityCapture[] = []
++	for(const { hash, regex, xPath, jsonPath } of params.responseRedactions ?? []) {
++		if(!hash) {
++			continue
++		}
++
++		const names = regex ? [...regex.matchAll(CAPTURE_NAME)].map(match => match[1]) : []
++		if(hash !== 'oprf-raw' || names.length !== 1) {
++			throw unbound('Hashed redactions must be one oprf-raw regex capture each')
++		}
++
++		// A redacted body cannot establish a selector's scope, so the regex must anchor the value itself.
++		if(xPath || jsonPath) {
++			throw unbound(`Identity capture ${names[0]} cannot be scoped by xPath or jsonPath`)
++		}
++
++		if(captures.some(({ key }) => key === names[0])) {
++			throw unbound(`Recipe captures ${names[0]} more than once`)
++		}
++
++		captures.push({ key: names[0], regex: regex! })
++	}
++
++	return captures
++}
++
++/** Keys the HTTP provider can sign for this recipe: identity captures, public templates and match captures. */
++function recipeSignedKeys(params: HttpParams, identity: IdentityCapture[]) {
++	const keys = new Set(identity.map(({ key }) => key))
++	const templates = [params.url, typeof params.body === 'string' ? params.body : undefined]
++	for(const { type, value } of params.responseMatches ?? []) {
++		templates.push(value)
++		if(type === 'regex') {
++			for(const [, name] of value.matchAll(CAPTURE_NAME)) {
++				keys.add(name)
++			}
++		}
++	}
++
++	for(const template of templates) {
++		for(const [, name] of template?.matchAll(PLACEHOLDER) ?? []) {
++			keys.add(name)
++		}
++	}
++
++	return keys
++}
++
++function unbound(message: string) {
++	return rejection('ERROR_BAD_REQUEST', 'SIGNED_CONTEXT_INVALID', message)
++}
+diff --git a/src/tests/identity-binding.test.ts b/src/tests/identity-binding.test.ts
+new file mode 100644
+index 000000000..b054b381e
+--- /dev/null
++++ b/src/tests/identity-binding.test.ts
+@@ -0,0 +1,460 @@
++import assert from 'node:assert/strict'
++import { createHash } from 'node:crypto'
++import { it, mock } from 'node:test'
++import { hexlify, Wallet } from 'ethers'
++
++import { inputContext } from '#src/tests/utils/claim-context.ts'
++
++// Records carry plaintext; the transcript decryption, oprf-raw replacement, HTTP provider and
++// identity check under test are the real code. IDENTITY_REAL_OPRF=1 runs the gnark OPRF with
++// generated keys (needs the ZK files and a supported architecture); otherwise sha256 stands in.
++const REAL_OPRF = process.env.IDENTITY_REAL_OPRF === '1'
++let currentHost = 'example.com'
++mock.module('#src/server/utils/process-handshake.ts', {
++	namedExports: {
++		async processHandshake() {
++			return { tlsVersion: 'TLS1_3', cipherSuite: 'TLS_CHACHA20_POLY1305_SHA256', hostname: currentHost, nextMsgIndex: 0 }
++		}
++	}
++})
++const actualZk = await import('#src/utils/zk.ts')
++mock.module('#src/utils/zk.ts', {
++	namedExports: {
++		...actualZk,
++		async verifyZkPacket({ ciphertext, zkReveal }: any) {
++			return { redactedPlaintext: ciphertext.slice(), oprfRawMarkers: zkReveal.oprfRawMarkers }
++		}
++	}
++})
++if(REAL_OPRF) {
++	const { logger } = await import('#src/utils/logger.ts')
++	const { shares } = await actualZk.makeDefaultOPRFOperator('chacha20', 'gnark', logger).generateThresholdKeys(2, 1)
++	process.env.TOPRF_SHARE_PRIVATE_KEY = hexlify(shares[0].privateKey)
++	process.env.TOPRF_SHARE_PUBLIC_KEY = hexlify(shares[0].publicKey)
++} else {
++	mock.module('#src/server/utils/oprf-raw.ts', {
++		namedExports: {
++			async computeOPRFRaw(plaintext: Uint8Array, markers: { dataLocation: { fromIndex: number, length: number } }[]) {
++				return markers.map(({ dataLocation }) => ({
++					dataLocation,
++					nullifier: new Uint8Array(createHash('sha256').update(plaintext.subarray(dataLocation.fromIndex, dataLocation.fromIndex + dataLocation.length)).digest())
++				}))
++			}
++		}
++	})
++}
++
++const [
++	{ assertValidClaimRequest },
++	{ providers },
++	{ AttestorError },
++	{ rejectionReason },
++	{ binaryHashToStr, hashProviderParams },
++	{ SIGNATURES },
++	{ computeOPRFRaw },
++	proto
++] = await Promise.all([
++	import('#src/server/utils/assert-valid-claim-request.ts'),
++	import('#src/providers/index.ts'),
++	import('#src/utils/error.ts'),
++	import('#src/utils/rejection-reason.ts'),
++	import('#src/utils/index.ts'),
++	import('#src/utils/signatures/index.ts'),
++	import('#src/server/utils/oprf-raw.ts'),
++	import('#src/proto/api.ts')
++])
++
++const ETH = proto.ServiceSignatureType.SERVICE_SIGNATURE_TYPE_ETH
++const VERSION = proto.AttestorVersion.ATTESTOR_VERSION_3_2_0
++const metadata = { signatureType: ETH, clientVersion: VERSION } as any
++const logger = { info() {}, debug() {}, warn() {}, error() {}, trace() {}, child() { return logger } } as any
++const owner = Wallet.createRandom()
++const encoder = new TextEncoder()
++const decoder = new TextDecoder()
++
++type Recipe = { host: string, params: Record<string, any>, secretParams?: Record<string, any> }
++type Marker = { fromIndex: number, length: number }
++
++// github-2026q3/maintainer-50-stars-actor-id-v1.0.1
++const ACTOR_ID = '58217469'
++const GITHUB: Recipe = {
++	host: 'github.com',
++	params: {
++		url: 'https://github.com/search?q=user%3A%40me%20stars%3A%3E%3D50%20is%3Apublic&type=repositories',
++		method: 'GET',
++		// The extension always sends an empty geoLocation.
++		geoLocation: '',
++		responseMatches: [
++			{ type: 'contains', value: '<meta name="octolytics-actor-id" content="{{github_actor_id}}" />' },
++			{ type: 'regex', value: '"result_count":(?:[1-9][0-9]*)\\b' }
++		],
++		responseRedactions: [
++			{ hash: 'oprf-raw', regex: '<meta name="octolytics-actor-id" content="(?<github_actor_id>[0-9]+)" />' },
++			{ regex: '"result_count":(?:[1-9][0-9]*)\\b' }
++		],
++		paramValues: { github_actor_id: ACTOR_ID }
++	}
++}
++const githubBody = (actorId = ACTOR_ID) => `<html><meta name="octolytics-actor-id" content="${actorId}" /><script>{"result_count":3}</script></html>`
++// Another GitHub page capturing the same account id in a different context.
++const GITHUB_PROFILE: Recipe = {
++	host: 'github.com',
++	params: {
++		url: 'https://github.com/settings/profile',
++		method: 'GET',
++		responseMatches: [{ type: 'contains', value: '"user_id":"{{github_actor_id}}"' }],
++		responseRedactions: [{ hash: 'oprf-raw', regex: '"user_id":"(?<github_actor_id>[0-9]+)"' }],
++		paramValues: { github_actor_id: ACTOR_ID }
++	}
++}
++
++// echo-groups/west-ham-verified-member: identity regexes verbatim, the facts shortened
++const ECHO_USER = '0f6a4c2e-9b1d-4e7a-8c3f-2d5b6e7f8a9b'
++const ECHO_GROUP = '336b2d8f-e40d-401b-8c98-5b9b23558cfb'
++const ECHO_GROUPS: Recipe = {
++	host: 'app.echo.xyz',
++	params: {
++		url: 'https://app.echo.xyz/groups/filter/joined',
++		method: 'GET',
++		responseMatches: [
++			{ type: 'contains', value: String.raw`\"GroupUUID\":\"${ECHO_GROUP}\",\"UserUUID\":\"{{echo_user}}\",\"State\":\"accepted\"` },
++			{ type: 'regex', value: String.raw`\\"isMember\\":true` }
++		],
++		responseRedactions: [
++			{ hash: 'oprf-raw', regex: String.raw`\\"GroupUUID\\":\\"${ECHO_GROUP}\\",\\"UserUUID\\":\\"(?<echo_user>[0-9a-f-]{36})\\",\\"State\\":\\"accepted\\"` },
++			{ regex: String.raw`\\"isMember\\":true` }
++		],
++		paramValues: { echo_user: ECHO_USER }
++	}
++}
++const echoGroupsBody = String.raw`<script>self.__next_f.push("{\"isMember\":true,\"joinRequest\":{\"UUID\":\"4a1b2c3d-0000-4000-8000-000000000000\",\"GroupUUID\":\"${ECHO_GROUP}\",\"UserUUID\":\"${ECHO_USER}\",\"State\":\"accepted\"}}")</script>`
++const ECHO_PROFILE: Recipe = {
++	host: 'app.echo.xyz',
++	params: {
++		url: 'https://app.echo.xyz/account/profile',
++		method: 'GET',
++		responseMatches: [
++			{ type: 'contains', value: String.raw`\"EntityUUID\":\"{{echo_user}}\",\"EntityType\":\"user\",\"Provider\":\"sumsub\",\"Type\":\"standard-kyc\",\"State\":\"completed\"` }
++		],
++		responseRedactions: [
++			{ hash: 'oprf-raw', regex: String.raw`\\"EntityUUID\\":\\"(?<echo_user>[0-9a-f-]{36})\\",\\"EntityType\\":\\"user\\",\\"Provider\\":\\"sumsub\\",\\"Type\\":\\"standard-kyc\\",\\"State\\":\\"completed\\"` }
++		],
++		paramValues: { echo_user: ECHO_USER }
++	}
++}
++const echoProfileBody = String.raw`<script>self.__next_f.push("{\"Complete\":[{\"UUID\":\"7c8d9e0f-0000-4000-8000-000000000000\",\"EntityUUID\":\"${ECHO_USER}\",\"EntityType\":\"user\",\"Provider\":\"sumsub\",\"Type\":\"standard-kyc\",\"State\":\"completed\"}]}")</script>`
++
++// fomo-clans/clan-member: the profile URL carries two secret parts and one reviewed public fragment
++const FOMO_USER = 'c0ffee12-3456-4abc-8def-0123456789ab'
++const FOMO_FRAGMENT = FOMO_USER.slice(14)
++const FOMO_CURRENT: Recipe = {
++	host: 'prod-api.fomo.family',
++	params: {
++		url: 'https://prod-api.fomo.family/v2/users/current',
++		method: 'GET',
++		responseMatches: [{ type: 'contains', value: '"responseObject":{"id":"{{fomo_user}}","address":"' }],
++		responseRedactions: [{ hash: 'oprf-raw', regex: '"responseObject":\\{"id":"(?<fomo_user>[0-9a-f-]{36})","address":"' }],
++		paramValues: { fomo_user: FOMO_USER }
++	}
++}
++const FOMO_PROFILE: Recipe = {
++	host: 'prod-api.fomo.family',
++	params: {
++		url: 'https://prod-api.fomo.family/v2/users/{{URL_PARAM_1_SECRET}}-{{URL_PARAM_2_SECRET}}-{{fomo_url_fragment}}',
++		method: 'GET',
++		responseMatches: [
++			{ type: 'contains', value: '"responseObject":{"id":"{{fomo_user}}","address":"' },
++			{ type: 'regex', value: '"clan":\\{"id":"(?:75c4e351-f125-4714-b843-d592985ba534|2c2e5343-ee46-4476-bd6f-238eb25ab9b7)","name":"' }
++		],
++		responseRedactions: [
++			{ hash: 'oprf-raw', regex: '"responseObject":\\{"id":"(?<fomo_user>[0-9a-f-]{36})","address":"' },
++			{ regex: '"clan":\\{"id":"(?:75c4e351-f125-4714-b843-d592985ba534|2c2e5343-ee46-4476-bd6f-238eb25ab9b7)","name":"' }
++		],
++		paramValues: { fomo_user: FOMO_USER, fomo_url_fragment: FOMO_FRAGMENT }
++	},
++	secretParams: { paramValues: { URL_PARAM_1_SECRET: FOMO_USER.slice(0, 8), URL_PARAM_2_SECRET: FOMO_USER.slice(9, 13) } }
++}
++const fomoBody = (clan = '"clan":{"id":"75c4e351-f125-4714-b843-d592985ba534","name":"Les Français"},') =>
++	`{"responseObject":{"id":"${FOMO_USER}","address":"0xabc",${clan}"handle":"GiantTallSmelt"}}`
++
++// A future recipe with two identities and a plain fact capture.
++const MULTI: Recipe = {
++	host: 'example.com',
++	params: {
++		url: 'https://example.com/me',
++		method: 'GET',
++		responseMatches: [
++			{ type: 'contains', value: '"user":"{{user_id}}"' },
++			{ type: 'contains', value: '"org":"{{org_id}}"' },
++			{ type: 'regex', value: '"plan":"(?<plan>[a-z]+ [a-z]+)"' }
++		],
++		responseRedactions: [
++			{ hash: 'oprf-raw', regex: '"user":"(?<user_id>[0-9]+)"' },
++			{ hash: 'oprf-raw', regex: '"org":"(?<org_id>[0-9]+)"' },
++			{ regex: '"plan":"(?<plan>[a-z]+ [a-z]+)"' }
++		],
++		paramValues: { user_id: '1001', org_id: '77' }
++	}
++}
++const MULTI_BODY = '{"user":"1001","org":"77","plan":"pro plan","handle":"neo","last_user":"1001"}'
++
++const EMAIL = 'alice@example.org'
++// The bench Google recipe's shape: the match does not delimit the value.
++const EMAIL_RECIPE: Recipe = {
++	host: 'example.com',
++	params: {
++		url: 'https://example.com/profile',
++		method: 'GET',
++		responseMatches: [{ type: 'contains', value: '{{email}}' }],
++		responseRedactions: [{ regex: '"(?<email>[^"\\\\\\s@]+@[^"\\\\\\s@]+)"', hash: 'oprf-raw' }],
++		paramValues: { email: EMAIL }
++	}
++}
++const EMAIL_BODY = `{"email":"${EMAIL}"}`
++
++async function nullifier(text: string) {
++	const data = encoder.encode(text)
++	const [{ nullifier }] = await computeOPRFRaw(data, [{ dataLocation: { fromIndex: 0, length: data.length } }], logger)
++	return binaryHashToStr(nullifier, data.length)
++}
++
++function record(plaintext: Uint8Array) {
++	const content = new Uint8Array([...plaintext, 0x17])
++	return new Uint8Array([0x17, 0x03, 0x03, content.length >> 8, content.length & 0xff, ...content])
++}
++
++function response(body: string) {
++	const bytes = encoder.encode(body)
++	return encoder.encode(`HTTP/1.1 200 OK\r\nContent-Length: ${bytes.length}\r\n\r\n${body}`)
++}
++
++/** Marker over `text` inside the nth `occurrence` of the response. */
++function at(body: string, text: string, occurrence = text, nth = 0): Marker {
++	const responseText = decoder.decode(response(body))
++	let index = -1
++	for(let i = 0; i <= nth; i++) {
++		index = responseText.indexOf(occurrence, index + 1)
++		assert.ok(index >= 0, occurrence)
++	}
++
++	const fromIndex = index + occurrence.indexOf(text)
++	assert.ok(fromIndex >= index, text)
++	return { fromIndex: encoder.encode(responseText.slice(0, fromIndex)).length, length: encoder.encode(text).length }
++}
++
++async function claim(
++	{ host, params, secretParams }: Recipe,
++	body: string,
++	markers: Marker[] = [],
++	{ splitAt, hide = [] }: { splitAt?: number, hide?: Marker[] } = {}
++) {
++	currentHost = host
++	const request = providers.http.createRequest({ headers: { Cookie: 'session=test' }, ...secretParams }, params as any, logger)
++	const requestBytes = (request.data as Uint8Array).slice()
++	for(const { fromIndex, toIndex } of request.redactions) {
++		requestBytes.fill(0x2a, fromIndex, toIndex)
++	}
++
++	const responseBytes = response(body)
++	// Bytes the proof does not reveal reach the attestor as the redaction character.
++	for(const { fromIndex, length } of hide) {
++		responseBytes.fill(0x2a, fromIndex, fromIndex + length)
++	}
++
++	const records = splitAt ? [responseBytes.slice(0, splitAt), responseBytes.slice(splitAt)] : [responseBytes]
++	const reveals = records.map(() => ({ oprfRawMarkers: [] as Marker[], overshotOprfRawLength: 0 }))
++	let offset = 0
++	const bounds = records.map(bytes => ({ start: offset, end: offset += bytes.length }))
++	for(const marker of markers) {
++		const i = bounds.findIndex(({ start, end }) => marker.fromIndex >= start && marker.fromIndex < end)
++		assert.ok(i >= 0, 'marker inside the response')
++		reveals[i].oprfRawMarkers.push({ fromIndex: marker.fromIndex - bounds[i].start, length: marker.length })
++		const overshot = marker.fromIndex + marker.length - bounds[i].end
++		if(overshot > 0) {
++			reveals[i + 1].overshotOprfRawLength = overshot
++		}
++	}
++
++	const zkReveal = (reveal = { oprfRawMarkers: [] as Marker[], overshotOprfRawLength: 0 }) => ({
++		proofs: [{ startIdx: 0 }],
++		oprfRawMarkers: reveal.oprfRawMarkers.map(dataLocation => ({ dataLocation })),
++		overshotOprfRawLength: reveal.overshotOprfRawLength
++	})
++	const SERVER = proto.TranscriptMessageSenderType.TRANSCRIPT_MESSAGE_SENDER_TYPE_SERVER
++	const unsigned = proto.ClaimTunnelRequest.create({
++		request: { id: 1, host, port: 443 },
++		data: {
++			provider: 'http',
++			parameters: JSON.stringify(params),
++			context: inputContext(),
++			owner: owner.address.toLowerCase(),
++			timestampS: Math.floor(Date.now() / 1000)
++		},
++		transcript: [
++			{ sender: proto.TranscriptMessageSenderType.TRANSCRIPT_MESSAGE_SENDER_TYPE_CLIENT, message: record(requestBytes), reveal: { zkReveal: zkReveal() } },
++			...records.map((bytes, i) => ({ sender: SERVER, message: record(bytes), reveal: { zkReveal: zkReveal(reveals[i]) } }))
++		]
++	})
++	const signature = await SIGNATURES[ETH].sign(proto.ClaimTunnelRequest.encode(unsigned).finish(), owner.privateKey)
++	const signed = { ...unsigned, signatures: { requestSignature: signature } }
++	// The final layer authorizes provider hashes here; earlier layers ignore the argument.
++	const info = await (assertValidClaimRequest as any)(signed, metadata, logger, [hashProviderParams(params as any)])
++	return JSON.parse(info.context).extractedParameters as Record<string, string>
++}
++
++async function expectRejected(reason: string, action: Promise<unknown>) {
++	await assert.rejects(action, (err: unknown) => {
++		assert.ok(err instanceof AttestorError, String(err))
++		assert.equal(rejectionReason(err), reason, String(err))
++		return true
++	})
++}
++
++it('signs a GitHub actor id as one nullifier across repeat proofs and recipes of the namespace', async() => {
++	const expected = await nullifier(ACTOR_ID)
++	assert.notEqual(expected, ACTOR_ID)
++	const body = githubBody()
++	assert.deepEqual(await claim(GITHUB, body, [at(body, ACTOR_ID)]), { github_actor_id: expected })
++	assert.deepEqual(await claim(GITHUB, body, [at(body, ACTOR_ID)]), { github_actor_id: expected })
++	const profile = `{"user_id":"${ACTOR_ID}","login":"octocat"}`
++	assert.deepEqual(await claim(GITHUB_PROFILE, profile, [at(profile, ACTOR_ID)]), { github_actor_id: expected })
++	const other = { ...GITHUB, params: { ...GITHUB.params, paramValues: { github_actor_id: '58217470' } } }
++	assert.notDeepEqual(await claim(other, githubBody('58217470'), [at(githubBody('58217470'), '58217470')]), { github_actor_id: expected })
++})
++
++it('signs the same Echo UUID nullifier on both connected requests', async() => {
++	const expected = await nullifier(ECHO_USER)
++	assert.deepEqual(await claim(ECHO_GROUPS, echoGroupsBody, [at(echoGroupsBody, ECHO_USER)]), { echo_user: expected })
++	assert.deepEqual(await claim(ECHO_PROFILE, echoProfileBody, [at(echoProfileBody, ECHO_USER)]), { echo_user: expected })
++})
++
++it('signs the fomo UUID nullifier on both connected requests and keeps the public URL fragment apart', async() => {
++	const expected = await nullifier(FOMO_USER)
++	assert.deepEqual(await claim(FOMO_CURRENT, fomoBody(), [at(fomoBody(), FOMO_USER)]), { fomo_user: expected })
++	assert.deepEqual(
++		await claim(FOMO_PROFILE, fomoBody(), [at(fomoBody(), FOMO_USER)]),
++		{ fomo_user: expected, fomo_url_fragment: FOMO_FRAGMENT }
++	)
++	// A marker on the fragment also rewrites the public URL part, so the request no longer matches.
++	await expectRejected('PROVIDER_VALIDATION_FAILED', claim(FOMO_PROFILE, fomoBody(), [at(fomoBody(), FOMO_FRAGMENT, FOMO_USER)]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(FOMO_PROFILE, fomoBody()))
++})
++
++it('binds every identity of a multi-capture recipe and passes recipe facts through', async() => {
++	assert.deepEqual(
++		await claim(MULTI, MULTI_BODY, [at(MULTI_BODY, '1001'), at(MULTI_BODY, '77')]),
++		{ user_id: await nullifier('1001'), org_id: await nullifier('77'), plan: 'pro plan' }
++	)
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(MULTI, MULTI_BODY, [at(MULTI_BODY, '1001')]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(MULTI, MULTI_BODY, [at(MULTI_BODY, '77')]))
++	// A third marker on a value the recipe does not capture.
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(MULTI, MULTI_BODY, [at(MULTI_BODY, '1001'), at(MULTI_BODY, '77'), at(MULTI_BODY, 'neo')]))
++	// The marked fact no longer matches its rule.
++	await expectRejected('PROVIDER_VALIDATION_FAILED', claim(MULTI, MULTI_BODY, [at(MULTI_BODY, '1001'), at(MULTI_BODY, '77'), at(MULTI_BODY, 'pro plan')]))
++})
++
++it('rejects an identity the client did not mark', async() => {
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, githubBody()))
++	// A pseudonym-shaped value revealed directly is not a capture of the recipe.
++	const pseudonym = { ...GITHUB, params: { ...GITHUB.params, paramValues: { github_actor_id: 'Ab+/CdE1f' } } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(pseudonym, githubBody('Ab+/CdE1f')))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(ECHO_PROFILE, echoProfileBody))
++})
++
++it('rejects a nullifier over part of the capture', async() => {
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, githubBody(), [at(githubBody(), '1746', ACTOR_ID)]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(ECHO_GROUPS, echoGroupsBody, [at(echoGroupsBody, ECHO_USER.slice(0, 8), ECHO_USER)]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(ECHO_GROUPS, echoGroupsBody, [at(echoGroupsBody, ECHO_USER.slice(9), ECHO_USER)]))
++	// Here the provider match alone accepts the partial nullifier, because the value is not delimited.
++	const partial = { ...EMAIL_RECIPE, params: { ...EMAIL_RECIPE.params, paramValues: { email: 'lice' } } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(partial, EMAIL_BODY, [at(EMAIL_BODY, 'lice', EMAIL)]))
++	assert.deepEqual(await claim(EMAIL_RECIPE, EMAIL_BODY, [at(EMAIL_BODY, EMAIL)]), { email: await nullifier(EMAIL) })
++})
++
++it('rejects split, overlapping and extra markers', async() => {
++	const body = githubBody()
++	const whole = at(body, ACTOR_ID)
++	const head = { fromIndex: whole.fromIndex, length: 4 }
++	const tail = { fromIndex: whole.fromIndex + 4, length: whole.length - 4 }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, body, [head, tail]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, body, [whole, whole]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, body, [whole, at(body, 'html')]))
++	// Overlapping markers already break the provider rules.
++	await expectRejected('PROVIDER_VALIDATION_FAILED', claim(GITHUB, body, [head, whole]))
++	await expectRejected('PROVIDER_VALIDATION_FAILED', claim(GITHUB, body, [whole, head]))
++	const uuid = at(echoGroupsBody, ECHO_USER)
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(ECHO_GROUPS, echoGroupsBody, [
++		{ fromIndex: uuid.fromIndex, length: 18 }, { fromIndex: uuid.fromIndex + 18, length: 18 }
++	]))
++})
++
++it('rejects a marker placed outside the recipe capture', async() => {
++	// The same digits elsewhere leave the capture raw, so the match on the replaced response fails.
++	const twice = `${githubBody()}<div data-user="${ACTOR_ID}"></div>`
++	await expectRejected('PROVIDER_VALIDATION_FAILED', claim(GITHUB, twice, [at(twice, ACTOR_ID, ACTOR_ID, 1)]))
++	assert.deepEqual(await claim(GITHUB, twice, [at(twice, ACTOR_ID)]), { github_actor_id: await nullifier(ACTOR_ID) })
++	await expectRejected('PROVIDER_VALIDATION_FAILED', claim(MULTI, MULTI_BODY, [at(MULTI_BODY, '1001', '"last_user":"1001"'), at(MULTI_BODY, '77')]))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, githubBody(), [at(githubBody(), 'html')]))
++})
++
++it('keeps an identity spanning TLS records as one input and rejects per-record markers', async() => {
++	const body = githubBody()
++	const whole = at(body, ACTOR_ID)
++	const splitAt = whole.fromIndex + 3
++	assert.deepEqual(await claim(GITHUB, body, [whole], { splitAt }), { github_actor_id: await nullifier(ACTOR_ID) })
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, body, [
++		{ fromIndex: whole.fromIndex, length: 3 }, { fromIndex: splitAt, length: whole.length - 3 }
++	], { splitAt }))
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(GITHUB, body, [{ fromIndex: whole.fromIndex, length: 3 }], { splitAt }))
++})
++
++it('rejects an identity capture with undisclosed bytes', async() => {
++	const email = at(EMAIL_BODY, EMAIL)
++	const first = { fromIndex: email.fromIndex, length: 1 }
++	const hidden = { ...EMAIL_RECIPE, params: { ...EMAIL_RECIPE.params, paramValues: { email: `*${EMAIL.slice(1)}` } } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(hidden, EMAIL_BODY, [email], { hide: [first] }))
++	const splitAt = email.fromIndex + 6
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(hidden, EMAIL_BODY, [email], { hide: [first], splitAt }))
++	const middle = { ...EMAIL_RECIPE, params: { ...EMAIL_RECIPE.params, paramValues: { email: `${EMAIL.slice(0, 3)}**${EMAIL.slice(5)}` } } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(middle, EMAIL_BODY, [email], { hide: [{ fromIndex: email.fromIndex + 3, length: 2 }] }))
++})
++
++it('rejects identity captures scoped by jsonPath or xPath', async() => {
++	// The bench Google recipe: the selector picks one of several emails, which a redacted body cannot show.
++	const body = `["other@example.org",null,"${EMAIL}"]`
++	const scoped = { ...EMAIL_RECIPE, params: { ...EMAIL_RECIPE.params, responseRedactions: [{ ...EMAIL_RECIPE.params.responseRedactions[0], jsonPath: '$[2]' }] } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(scoped, body, [at(body, EMAIL)]))
++	const html = { ...EMAIL_RECIPE, params: { ...EMAIL_RECIPE.params, responseRedactions: [{ ...EMAIL_RECIPE.params.responseRedactions[0], xPath: '//span' }] } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(html, EMAIL_BODY, [at(EMAIL_BODY, EMAIL)]))
++})
++
++it('rejects extracted values the recipe does not produce', async() => {
++	const profile = `{"user_id":"${ACTOR_ID}","login":"octocat"}`
++	// A secret template supplied through public paramValues would add a client-chosen field.
++	for(const name of ['secret_page', 'URL_PARAM_1_SECRET']) {
++		const leaked = { ...GITHUB_PROFILE, params: { ...GITHUB_PROFILE.params, url: `https://github.com/settings/{{${name}}}`, paramValues: { ...GITHUB_PROFILE.params.paramValues, [name]: 'profile' } } }
++		await expectRejected('SIGNED_CONTEXT_INVALID', claim(leaked, profile, [at(profile, ACTOR_ID)]))
++	}
++})
++
++it('rejects a routing template that salts the identity', async() => {
++	const salted = { ...GITHUB, params: { ...GITHUB.params, proxySessionId: '{{salt}}', paramValues: { ...GITHUB.params.paramValues, salt: 'wallet0001' } } }
++	assert.equal(hashProviderParams(salted.params as any), hashProviderParams(GITHUB.params as any))
++	await expectRejected('PROVIDER_PARAMS_INVALID', claim(salted, githubBody(), [at(githubBody(), ACTOR_ID)]))
++	const geo = { ...GITHUB, params: { ...GITHUB.params, geoLocation: 'US' } }
++	await expectRejected('PROVIDER_PARAMS_INVALID', claim(geo, githubBody(), [at(githubBody(), ACTOR_ID)]))
++})
++
++it('signs a recipe without identity captures only when nothing was marked', async() => {
++	const facts = { ...MULTI, params: { ...MULTI.params, responseRedactions: [{ regex: '"plan":"(?<plan>[a-z]+ [a-z]+)"' }], responseMatches: [MULTI.params.responseMatches[2]] } }
++	assert.deepEqual(await claim(facts, MULTI_BODY), { plan: 'pro plan' })
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(facts, MULTI_BODY, [at(MULTI_BODY, 'neo')]))
++})
++
++it('rejects hashed redactions that are not a single oprf-raw capture', async() => {
++	const body = githubBody()
++	const toprf = { ...GITHUB, params: { ...GITHUB.params, responseRedactions: [{ ...GITHUB.params.responseRedactions[0], hash: 'oprf' }] } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(toprf, body, [at(body, ACTOR_ID)]))
++	const unnamed = { ...GITHUB, params: { ...GITHUB.params, responseRedactions: [{ hash: 'oprf-raw', regex: '<meta name="octolytics-actor-id" content="[0-9]+" />' }] } }
++	await expectRejected('SIGNED_CONTEXT_INVALID', claim(unnamed, body, [at(body, ACTOR_ID)]))
++})
+diff --git a/src/types/general.ts b/src/types/general.ts
+index a07038125..d8f92d092 100644
+--- a/src/types/general.ts
++++ b/src/types/general.ts
+@@ -65,6 +65,8 @@ export type IDecryptedTranscriptMessage = {
+ 
+ export type IDecryptedTranscript = {
+ 	transcript: IDecryptedTranscriptMessage[]
++	/** The revealed plaintext before oprf-raw replacement */
++	originalTranscript: IDecryptedTranscriptMessage[]
+ 	tlsVersion: TLSProtocolVersion
+ 	hostname: string
+ 	/**

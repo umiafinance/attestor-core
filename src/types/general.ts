@@ -65,6 +65,8 @@ export type IDecryptedTranscriptMessage = {
 
 export type IDecryptedTranscript = {
 	transcript: IDecryptedTranscriptMessage[]
+	/** The revealed plaintext before oprf-raw replacement */
+	originalTranscript: IDecryptedTranscriptMessage[]
 	tlsVersion: TLSProtocolVersion
 	hostname: string
 	/**

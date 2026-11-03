@@ -93,9 +93,15 @@
       "tests": ["bgp-listener.test.ts", "bgp-reconnect.test.ts"]
     },
     {
+      "layer": "identity",
+      "file": "identity-binding.patch",
+      "sha256": "92c31ed804ba5eb2af7374cc66ea6e745fb3d0f8042ea7f63d587aa77f0eaf03",
+      "tests": ["identity-binding.test.ts"]
+    },
+    {
       "layer": "final",
       "file": "attestor-telemetry.patch",
-      "sha256": "e13275407119449a9c73180e4d92acaa482492b340a4e3603c5646d1f4ca81be",
+      "sha256": "83b456b83b5516b70a0eba09bb9e79ebc2e071605c5271787d242bf81bb9951f",
       "tests": ["attestor-telemetry.test.ts", "regex-safety.test.ts", "http-regex.test.ts"],
       "packageSha256": "b7b08559bbea6bf633546c5eaca956a5ddda4ead01fe56d0f5502832b9a19386",
       "packageLockSha256": "8faf13f1f9ab7bd0f5d97b133f2c175a4711580404ef8d7753cd145d1ce2eed8"
