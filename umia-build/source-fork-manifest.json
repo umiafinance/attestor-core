@@ -99,6 +99,12 @@
       "tests": ["identity-binding.test.ts"]
     },
     {
+      "layer": "redaction",
+      "file": "path-redaction-runs.patch",
+      "sha256": "e02994f89c55febef7cd5b016cffda75fd601d157df800c2861ef5d49b6e2593",
+      "tests": ["path-redaction-runs.test.ts"]
+    },
+    {
       "layer": "final",
       "file": "attestor-telemetry.patch",
       "sha256": "83b456b83b5516b70a0eba09bb9e79ebc2e071605c5271787d242bf81bb9951f",
