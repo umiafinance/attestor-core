@@ -1,0 +1,106 @@
+diff --git a/src/providers/http/index.ts b/src/providers/http/index.ts
+index fe87de1..4ec655e 100644
+--- a/src/providers/http/index.ts
++++ b/src/providers/http/index.ts
+@@ -40,8 +40,11 @@ const OK_HTTP_HEADER = 'HTTP/1.1 200'
+ 
+ // we need to ensure the HTTP line (METHOD <path> HTTP/1.1) does not
+ // contain another request smuggled in, so we set the maximum number of
+-// redactions in the path to be less than the length of the minimum valid HTTP
+-// request line that can create a smuggle-able tunnel
++// consecutive redactions in the path to be less than the length of the
++// minimum valid HTTP request line that can create a smuggle-able tunnel.
++// Redactions separated by a visible byte cannot spell it: that byte is fixed
++// by the signed template, so a path like a hidden UUID may hide every
++// hyphen-separated group as long as no single group reaches the limit.
+ // Should be about 59 chars
+ const MIN_INJECTION_STR
+ 	= ' HTTP/1.1\r\n\r\n'
+@@ -530,7 +533,7 @@ const HTTP_PROVIDER: Provider<'http'> = {
+ // even if another request was made before the one we're reading now, the
+ // validation happens against the last one. Prevents a spoof where the claim
+ // response was received for another request that we did not expect.
+-function assertNoSmuggle(reqBuffer: Uint8Array, params: HTTPProviderParams) {
++export function assertNoSmuggle(reqBuffer: Uint8Array, params: HTTPProviderParams) {
+ 	const reqStr = uint8ArrayToBinaryStr(reqBuffer)
+ 	const expRegex = makeRegex(
+ 		`^${params.method} (?<path>[^\\s]+) HTTP\\/1\\.1\\r\\n`
+@@ -544,15 +547,17 @@ function assertNoSmuggle(reqBuffer: Uint8Array, params: HTTPProviderParams) {
+ 		)
+ 	}
+ 
+-	let redInPathCount = 0
++	let redInPathRun = 0
++	let longestRedInPathRun = 0
+ 	for(const char of rslt.groups.path) {
+-		if(char === REDACTION_CHAR) {
+-			redInPathCount++
+-		}
++		redInPathRun = char === REDACTION_CHAR ? redInPathRun + 1 : 0
++		longestRedInPathRun = Math.max(longestRedInPathRun, redInPathRun)
+ 	}
+ 
+-	if(redInPathCount > MAX_REDACTIONS_IN_PATH) {
+-		throw new Error(`Too many redactions in URL path: ${redInPathCount}`)
++	if(longestRedInPathRun > MAX_REDACTIONS_IN_PATH) {
++		throw new Error(
++			`Too many consecutive redactions in URL path: ${longestRedInPathRun}`
++		)
+ 	}
+ }
+ 
+diff --git a/src/tests/path-redaction-runs.test.ts b/src/tests/path-redaction-runs.test.ts
+new file mode 100644
+index 0000000..5a64b80
+--- /dev/null
++++ b/src/tests/path-redaction-runs.test.ts
+@@ -0,0 +1,49 @@
++import assert from 'node:assert'
++import { it } from 'node:test'
++
++import { assertNoSmuggle } from '#src/providers/http/index.ts'
++import { REDACTION_CHAR, strToUint8Array } from '#src/utils/index.ts'
++
++const PARAMS = {
++	url: 'https://prod-api.fomo.family/v2/users/{{id}}',
++	method: 'GET',
++	responseMatches: [],
++	responseRedactions: [],
++} as const
++
++function request(path: string) {
++	return strToUint8Array(
++		`GET ${path} HTTP/1.1\r\n`
++		+ 'Host: prod-api.fomo.family\r\n'
++		+ 'Connection: close\r\n\r\n'
++	)
++}
++
++const hidden = (length: number) => REDACTION_CHAR.repeat(length)
++
++it('allows a hidden UUID whose groups are separated by visible hyphens', () => {
++	const path = `/v2/users/${[8, 4, 4, 4, 12].map(hidden).join('-')}`
++	assert.doesNotThrow(() => assertNoSmuggle(request(path), PARAMS))
++})
++
++it('allows the upstream limit of twelve consecutive redactions', () => {
++	assert.doesNotThrow(() => assertNoSmuggle(request(`/v2/users/${hidden(12)}`), PARAMS))
++})
++
++it('rejects a run long enough to end the request line', () => {
++	assert.throws(
++		() => assertNoSmuggle(request(`/v2/users/${hidden(13)}`), PARAMS),
++		{ message: 'Too many consecutive redactions in URL path: 13' }
++	)
++	assert.throws(
++		() => assertNoSmuggle(request(`/v2/users/${hidden(5)}-${hidden(13)}-${hidden(2)}`), PARAMS),
++		{ message: 'Too many consecutive redactions in URL path: 13' }
++	)
++})
++
++it('still requires the signed method, host and connection headers', () => {
++	assert.throws(
++		() => assertNoSmuggle(request(`/v2/users/${hidden(8)}`), { ...PARAMS, method: 'POST' }),
++		{ message: /Method\/Host mismatch/ }
++	)
++})
