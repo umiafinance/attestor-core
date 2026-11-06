@@ -209,12 +209,12 @@ describe('pre-init socket limits', () => {
 		(client as any).socket.addEventListener('close', (event: { code: number }) => resolve(event.code))
 	))
 
-	async function withServer(test: (url: string) => Promise<void>) {
+	async function withServer(test: (url: string, server: Awaited<ReturnType<typeof createServer>>) => Promise<void>) {
 		process.env.AUTHENTICATION_PUBLIC_KEY = issuer.publicKey
 		const port = getRandomPort()
 		const server = await createServer(port)
 		try {
-			await test(`ws://127.0.0.1:${port}${WS_PATHNAME}`)
+			await test(`ws://127.0.0.1:${port}${WS_PATHNAME}`, server)
 		} finally {
 			server.close()
 			delete process.env.AUTHENTICATION_PUBLIC_KEY
@@ -273,6 +273,34 @@ describe('pre-init socket limits', () => {
 		} finally {
 			preAuth.terminate()
 			await authed.terminateConnection()
+		}
+	}))
+
+	it('admits Echo-sized messages and exactly 64 MiB, but rejects the next byte', () => withServer(async (url, server) => {
+		assert.equal(MAX_AUTHENTICATED_WS_PAYLOAD_BYTES, 64 * 1024 * 1024)
+		assert.equal(MAX_PRE_AUTH_WS_PAYLOAD_BYTES, 64 * 1024)
+		const client = new AttestorClient({ url, authRequest: await authRequest(), makeWebSocket: target => new WebSocket(target) })
+		try {
+			await client.waitForInit()
+			const receiver = [...server.clients][0]
+			const socket = (client as any).socket as WebSocket
+			// Reported compressed proof totals plus room for the claim envelope.
+			// Transport admission only: these are synthetic tunnel messages, not valid proofs.
+			for(const frameBytes of [39_392_607 + 4096, 42_889_434 + 4096, 38_909_154 + 4096, MAX_AUTHENTICATED_WS_PAYLOAD_BYTES]) {
+				const payloadBytes = frameBytes - 32
+				const overhead = tunnelMessage(payloadBytes).length - payloadBytes
+				const frame = tunnelMessage(frameBytes - overhead)
+				assert.equal(frame.length, frameBytes)
+				const received = new Promise<number>(resolve => receiver.once('message', data => resolve((data as Buffer).length)))
+				await new Promise<void>((resolve, reject) => socket.send(frame, err => err ? reject(err) : resolve()))
+				assert.equal(await within(received, 5_000), frame.length)
+				assert.equal(client.isOpen, true)
+			}
+			const closed = closeCode(client)
+			socket.send(new Uint8Array(MAX_AUTHENTICATED_WS_PAYLOAD_BYTES + 1))
+			assert.equal(await within(closed, 5_000), 1009)
+		} finally {
+			await client.terminateConnection()
 		}
 	}))
 

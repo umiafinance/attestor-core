@@ -105,6 +105,12 @@
       "tests": ["path-redaction-runs.test.ts"]
     },
     {
+      "layer": "payload",
+      "file": "proof-payload-limits.patch",
+      "sha256": "beb083853392bce0ccc06091e18d616b2934f1a1aabb828ffa40c481dd61b05d",
+      "tests": []
+    },
+    {
       "layer": "final",
       "file": "attestor-telemetry.patch",
       "sha256": "83b456b83b5516b70a0eba09bb9e79ebc2e071605c5271787d242bf81bb9951f",
