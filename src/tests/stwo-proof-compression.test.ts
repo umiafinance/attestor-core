@@ -52,11 +52,11 @@ it('bounds cumulative inflated bytes across packets, including mixed compressed 
 	for(const compressed of [false, true]) {
 		const claim = ClaimTunnelRequest.create({
 			zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
-			transcript: Array.from({ length: 16 }, (_, index) => ({
+			transcript: Array.from({ length: 32 }, (_, index) => ({
 				reveal: { zkReveal: { proofs: [{ proofData: compressed && index % 2 ? encoded : raw }] } }
 			}))
 		})
-		// Exactly 64 MiB fits; the next byte in a separate packet must fail.
+		// Exactly 128 MiB fits; the next byte in a separate packet must fail.
 		restoreStwoProofs(claim)
 		claim.transcript.push(ClaimTunnelRequest.create({
 			transcript: [{ reveal: { zkReveal: { proofs: [{ proofData: new Uint8Array(1) }] } } }]
@@ -68,3 +68,19 @@ it('bounds cumulative inflated bytes across packets, including mixed compressed 
 it('keeps the individual raw proof limit at 4 MiB', () => {
 	assert.throws(() => restoreStwoProofs(request(new Uint8Array(4 * 1024 * 1024 + 1))), /Proof too large/)
 })
+
+for(const [chunks, total] of [[45, 65_757_369], [49, 71_514_393], [44, 64_821_276]]) {
+	it(`restores the reported Echo transcript with ${chunks} proofs and ${total} bytes`, () => {
+		// Synthetic admission fixture: no account data or real cryptographic proof.
+		const regularSize = Math.floor(total / chunks)
+		const sizes = Array.from({ length: chunks }, (_, i) => regularSize + (i < total % chunks ? 1 : 0))
+		const claim = ClaimTunnelRequest.create({
+			zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
+			transcript: sizes.map(size => ({ reveal: { zkReveal: { proofs: [{
+				proofData: Buffer.concat([magic, deflateSync(new Uint8Array(size).fill(0x41))])
+			}] } } }))
+		})
+		restoreStwoProofs(claim)
+		assert.deepEqual(claim.transcript.map(packet => packet.reveal?.zkReveal?.proofs[0].proofData.length), sizes)
+	})
+}

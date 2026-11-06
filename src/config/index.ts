@@ -68,6 +68,6 @@ export const MAX_SOCKETS_PER_AUTH = 4
 export const MAX_PRE_AUTH_WS_PAYLOAD_BYTES = 64 * 1024
 
 // Measured stwo claimTunnel: 6-11 MB for 1-4 short reveals, about 19 KB more per revealed byte.
-export const MAX_AUTHENTICATED_WS_PAYLOAD_BYTES = 32 * 1024 * 1024
+export const MAX_AUTHENTICATED_WS_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 export const BGP_WS_URL = 'wss://ris-live.ripe.net/v1/ws/?client=reclaim-hijack-detector'

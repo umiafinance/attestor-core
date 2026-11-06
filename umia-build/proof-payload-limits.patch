@@ -1,0 +1,119 @@
+diff --git a/src/config/index.ts b/src/config/index.ts
+index 1be0c7a15..36f0ce7cf 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -68,6 +68,6 @@ export const MAX_SOCKETS_PER_AUTH = 4
+ export const MAX_PRE_AUTH_WS_PAYLOAD_BYTES = 64 * 1024
+ 
+ // Measured stwo claimTunnel: 6-11 MB for 1-4 short reveals, about 19 KB more per revealed byte.
+-export const MAX_AUTHENTICATED_WS_PAYLOAD_BYTES = 32 * 1024 * 1024
++export const MAX_AUTHENTICATED_WS_PAYLOAD_BYTES = 64 * 1024 * 1024
+ 
+ export const BGP_WS_URL = 'wss://ris-live.ripe.net/v1/ws/?client=reclaim-hijack-detector'
+diff --git a/src/server/utils/stwo-proof-compression.ts b/src/server/utils/stwo-proof-compression.ts
+index 805bca0e1..639f0205b 100644
+--- a/src/server/utils/stwo-proof-compression.ts
++++ b/src/server/utils/stwo-proof-compression.ts
+@@ -4,8 +4,8 @@ import { AttestorError } from '#src/utils/index.ts'
+ 
+ const MAGIC = Buffer.from('UMIA_STWO_ZLIB_V1\0')
+ const MAX_PROOF_BYTES = 4 * 1024 * 1024
+-// Compressed claims may fit the 32 MiB wire cap while restoring more proof bytes.
+-const MAX_TOTAL_PROOF_BYTES = 64 * 1024 * 1024
++// Compressed claims may fit the 64 MiB wire cap while restoring more proof bytes.
++const MAX_TOTAL_PROOF_BYTES = 128 * 1024 * 1024
+ 
+ /** Called only after the signed request has been verified. */
+ export function restoreStwoProofs(request: ClaimTunnelRequest) {
+diff --git a/src/tests/stwo-proof-compression.test.ts b/src/tests/stwo-proof-compression.test.ts
+index 0efce17ea..926a5cc8b 100644
+--- a/src/tests/stwo-proof-compression.test.ts
++++ b/src/tests/stwo-proof-compression.test.ts
+@@ -52,11 +52,11 @@ it('bounds cumulative inflated bytes across packets, including mixed compressed
+ 	for(const compressed of [false, true]) {
+ 		const claim = ClaimTunnelRequest.create({
+ 			zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
+-			transcript: Array.from({ length: 16 }, (_, index) => ({
++			transcript: Array.from({ length: 32 }, (_, index) => ({
+ 				reveal: { zkReveal: { proofs: [{ proofData: compressed && index % 2 ? encoded : raw }] } }
+ 			}))
+ 		})
+-		// Exactly 64 MiB fits; the next byte in a separate packet must fail.
++		// Exactly 128 MiB fits; the next byte in a separate packet must fail.
+ 		restoreStwoProofs(claim)
+ 		claim.transcript.push(ClaimTunnelRequest.create({
+ 			transcript: [{ reveal: { zkReveal: { proofs: [{ proofData: new Uint8Array(1) }] } } }]
+@@ -68,3 +68,19 @@ it('bounds cumulative inflated bytes across packets, including mixed compressed
+ it('keeps the individual raw proof limit at 4 MiB', () => {
+ 	assert.throws(() => restoreStwoProofs(request(new Uint8Array(4 * 1024 * 1024 + 1))), /Proof too large/)
+ })
++
++for(const [chunks, total] of [[45, 65_757_369], [49, 71_514_393], [44, 64_821_276]]) {
++	it(`restores the reported Echo transcript with ${chunks} proofs and ${total} bytes`, () => {
++		// Synthetic admission fixture: no account data or real cryptographic proof.
++		const regularSize = Math.floor(total / chunks)
++		const sizes = Array.from({ length: chunks }, (_, i) => regularSize + (i < total % chunks ? 1 : 0))
++		const claim = ClaimTunnelRequest.create({
++			zkEngine: ZKProofEngine.ZK_ENGINE_STWO,
++			transcript: sizes.map(size => ({ reveal: { zkReveal: { proofs: [{
++				proofData: Buffer.concat([magic, deflateSync(new Uint8Array(size).fill(0x41))])
++			}] } } }))
++		})
++		restoreStwoProofs(claim)
++		assert.deepEqual(claim.transcript.map(packet => packet.reveal?.zkReveal?.proofs[0].proofData.length), sizes)
++	})
++}
+diff --git a/src/tests/sec-hardening.test.ts b/src/tests/sec-hardening.test.ts
+index a00d93738..8faf8e23b 100644
+--- a/src/tests/sec-hardening.test.ts
++++ b/src/tests/sec-hardening.test.ts
+@@ -209,12 +209,12 @@ describe('pre-init socket limits', () => {
+ 		(client as any).socket.addEventListener('close', (event: { code: number }) => resolve(event.code))
+ 	))
+ 
+-	async function withServer(test: (url: string) => Promise<void>) {
++	async function withServer(test: (url: string, server: Awaited<ReturnType<typeof createServer>>) => Promise<void>) {
+ 		process.env.AUTHENTICATION_PUBLIC_KEY = issuer.publicKey
+ 		const port = getRandomPort()
+ 		const server = await createServer(port)
+ 		try {
+-			await test(`ws://127.0.0.1:${port}${WS_PATHNAME}`)
++			await test(`ws://127.0.0.1:${port}${WS_PATHNAME}`, server)
+ 		} finally {
+ 			server.close()
+ 			delete process.env.AUTHENTICATION_PUBLIC_KEY
+@@ -276,6 +276,34 @@ describe('pre-init socket limits', () => {
+ 		}
+ 	}))
+ 
++	it('admits Echo-sized messages and exactly 64 MiB, but rejects the next byte', () => withServer(async (url, server) => {
++		assert.equal(MAX_AUTHENTICATED_WS_PAYLOAD_BYTES, 64 * 1024 * 1024)
++		assert.equal(MAX_PRE_AUTH_WS_PAYLOAD_BYTES, 64 * 1024)
++		const client = new AttestorClient({ url, authRequest: await authRequest(), makeWebSocket: target => new WebSocket(target) })
++		try {
++			await client.waitForInit()
++			const receiver = [...server.clients][0]
++			const socket = (client as any).socket as WebSocket
++			// Reported compressed proof totals plus room for the claim envelope.
++			// Transport admission only: these are synthetic tunnel messages, not valid proofs.
++			for(const frameBytes of [39_392_607 + 4096, 42_889_434 + 4096, 38_909_154 + 4096, MAX_AUTHENTICATED_WS_PAYLOAD_BYTES]) {
++				const payloadBytes = frameBytes - 32
++				const overhead = tunnelMessage(payloadBytes).length - payloadBytes
++				const frame = tunnelMessage(frameBytes - overhead)
++				assert.equal(frame.length, frameBytes)
++				const received = new Promise<number>(resolve => receiver.once('message', data => resolve((data as Buffer).length)))
++				await new Promise<void>((resolve, reject) => socket.send(frame, err => err ? reject(err) : resolve()))
++				assert.equal(await within(received, 5_000), frame.length)
++				assert.equal(client.isOpen, true)
++			}
++			const closed = closeCode(client)
++			socket.send(new Uint8Array(MAX_AUTHENTICATED_WS_PAYLOAD_BYTES + 1))
++			assert.equal(await within(closed, 5_000), 1009)
++		} finally {
++			await client.terminateConnection()
++		}
++	}))
++
+ 	it('caps concurrent sockets per auth ID and frees a slot on close', () => withServer(async url => {
+ 		const auth = await authRequest()
+ 		const clients = Array.from({ length: MAX_SOCKETS_PER_AUTH }, () => new AttestorClient({ url, authRequest: auth }))
