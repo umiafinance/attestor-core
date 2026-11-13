@@ -1,0 +1,320 @@
+diff --git a/src/client/utils/message-handler.ts b/src/client/utils/message-handler.ts
+index 8a5627b..62d2878 100644
+--- a/src/client/utils/message-handler.ts
++++ b/src/client/utils/message-handler.ts
+@@ -1,12 +1,18 @@
+ import type { RPCMessage } from '#src/proto/api.ts'
+-import { RPCMessages } from '#src/proto/api.ts'
+ import type { IAttestorSocket } from '#src/types/index.ts'
++import { decodeRpcFrame, InvalidRpcFrameError } from '#src/utils/rpc-frame.ts'
+ import { AttestorError, extractArrayBufferFromWsData, getRpcRequest, getRpcRequestType, getRpcResponseType } from '#src/utils/index.ts'
+ 
+ export async function wsMessageHandler(this: IAttestorSocket, data: unknown) {
+ 	// extract array buffer from WS data & decode proto
+ 	const buff = await extractArrayBufferFromWsData(data)
+-	const { messages } = RPCMessages.decode(buff)
++	let messages: RPCMessage[]
++	try {
++		messages = decodeRpcFrame(buff).messages
++	} catch(err) {
++		await this.terminateConnection(err)
++		return
++	}
+ 	for(const msg of messages) {
+ 		await handleMessage.call(this, msg)
+ 	}
+@@ -118,5 +124,5 @@ export function handleMessage(this: IAttestorSocket, msg: RPCMessage) {
+ 		return
+ 	}
+ 
+-	this.logger.warn({ msg }, 'unhandled message')
+-}
+\ No newline at end of file
++	return this.terminateConnection(new InvalidRpcFrameError())
++}
+diff --git a/src/server/utils/generics.ts b/src/server/utils/generics.ts
+index aee3b17..9921596 100644
+--- a/src/server/utils/generics.ts
++++ b/src/server/utils/generics.ts
+@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'http'
+ import { Address4, Address6 } from 'ip-address'
+ 
+ import type { ServiceSignatureType } from '#src/proto/api.ts'
+-import { RPCMessages } from '#src/proto/api.ts'
++import { decodeRpcFrame } from '#src/utils/rpc-frame.ts'
+ import { resolveHostnames } from '#src/server/utils/dns.ts'
+ import { getEnvVariable } from '#src/utils/env.ts'
+ import { AttestorError, strToUint8Array } from '#src/utils/index.ts'
+@@ -65,7 +65,7 @@ export function getInitialMessagesFromQuery(req: IncomingMessage) {
+ 	}
+ 
+ 	const msgsBytes = Buffer.from(messagesB64, 'base64')
+-	const msgs = RPCMessages.decode(msgsBytes)
++	const msgs = decodeRpcFrame(msgsBytes)
+ 	return msgs.messages
+ }
+ 
+diff --git a/src/tests/rpc-frame-socket.test.ts b/src/tests/rpc-frame-socket.test.ts
+new file mode 100644
+index 0000000..57e7ee9
+--- /dev/null
++++ b/src/tests/rpc-frame-socket.test.ts
+@@ -0,0 +1,103 @@
++import assert from 'node:assert/strict'
++import { once } from 'node:events'
++import { it } from 'node:test'
++import type { IncomingMessage } from 'node:http'
++import { Wallet } from 'ethers'
++import { WebSocket } from 'ws'
++
++import { RPCMessages } from '#src/proto/api.ts'
++import { InvalidRpcFrameError } from '#src/utils/rpc-frame.ts'
++
++process.env.CLAIM_EPOCH = '2'
++process.env.CLAIM_CHAIN_IDS = '10143'
++process.env.PRIVATE_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001'
++process.env.DISABLE_BGP_CHECKS = '1'
++const issuer = Wallet.createRandom()
++process.env.AUTHENTICATION_PUBLIC_KEY = issuer.publicKey
++
++const [
++	{ createServer }, { AttestorClient }, { createAuthRequest }, { getRandomPort },
++	{ getInitialMessagesFromQuery }, { wsMessageHandler, handleMessage },
++] = await Promise.all([
++	import('#src/server/create-server.ts'), import('#src/client/utils/client-socket.ts'),
++	import('#src/utils/auth.ts'), import('#src/tests/utils.ts'),
++	import('#src/server/utils/generics.ts'), import('#src/client/utils/message-handler.ts'),
++])
++
++it('applies the same bound to upgrade-query messages', () => {
++	const bytes = Buffer.alloc(66, Buffer.from([10, 0]))
++	const req = { url: `/ws?messages=${encodeURIComponent(bytes.toString('base64'))}` } as IncomingMessage
++	assert.throws(() => getInitialMessagesFromQuery(req), InvalidRpcFrameError)
++})
++
++it('rejects the entire batch before dispatch or per-entry logging', async() => {
++	let terminations = 0
++	const unexpected = () => assert.fail('invalid batch was dispatched or logged')
++	const client = {
++		isClosed: false,
++		logger: { trace: unexpected, warn: unexpected },
++		dispatchRPCEvent: unexpected,
++		async terminateConnection(err: Error) {
++			assert.ok(err instanceof InvalidRpcFrameError)
++			terminations++
++		},
++	} as unknown as ThisParameterType<typeof wsMessageHandler>
++	const valid = RPCMessages.encode(RPCMessages.create({ messages: [{ createTunnelResponse: {} }] })).finish()
++	await wsMessageHandler.call(client, Buffer.concat([valid, Buffer.from([10, 0])]))
++	assert.equal(terminations, 1)
++	// A direct caller also closes for an unhandled entry without logging its contents.
++	client.logger.trace = () => {}
++	await handleMessage.call(client, { id: 1 })
++	assert.equal(terminations, 2)
++})
++
++it('closes malformed and oversized batches, releases auth slots, and keeps serving valid clients', { timeout: 15_000 }, async() => {
++	const port = getRandomPort()
++	const server = await createServer(port)
++	const url = `ws://127.0.0.1:${port}/ws`
++	const authRequest = await createAuthRequest({ id: 'rpc-frame-session', hostWhitelist: ['example.com'] }, issuer.privateKey)
++	const sockets: WebSocket[] = []
++	try {
++		// More than four successive authenticated sockets also tests slot release on rejection.
++		for(const payload of [
++			Buffer.alloc(4 * 1024 * 1024, Buffer.from([10, 0])),
++			Buffer.from([10, 0]), Buffer.from([10, 3, 208, 1, 0]),
++			Buffer.from([10, 128]), Buffer.from([10, 2, 56, 0]),
++		]) {
++			let socket!: WebSocket
++			const client = new AttestorClient({ url, authRequest, makeWebSocket: target => {
++				socket = new WebSocket(target)
++				sockets.push(socket)
++				return socket
++			} })
++			await client.waitForInit()
++			const closed = once(socket, 'close')
++			socket.send(payload)
++			await closed
++			assert.equal(client.isClosed, true)
++		}
++		const anonymous = new WebSocket(url)
++		sockets.push(anonymous)
++		await once(anonymous, 'open')
++		const closed = once(anonymous, 'close')
++		anonymous.send(Buffer.alloc(64 * 1024, Buffer.from([10, 0])))
++		await closed
++
++		const query = Buffer.alloc(66, Buffer.from([10, 0])).toString('base64')
++		const invalidQuery = new WebSocket(`${url}?messages=${encodeURIComponent(query)}`)
++		sockets.push(invalidQuery)
++		await once(invalidQuery, 'close')
++
++		const healthy = new AttestorClient({ url, authRequest, makeWebSocket: target => new WebSocket(target) })
++		try {
++			await healthy.waitForInit()
++			assert.equal(healthy.isOpen, true)
++		} finally {
++			await healthy.terminateConnection()
++		}
++	} finally {
++		for(const socket of sockets) socket.terminate()
++		for(const socket of server.clients) socket.terminate()
++		await new Promise<void>(resolve => server.close(() => resolve()))
++	}
++})
+diff --git a/src/tests/rpc-frame.test.ts b/src/tests/rpc-frame.test.ts
+new file mode 100644
+index 0000000..be9d06d
+--- /dev/null
++++ b/src/tests/rpc-frame.test.ts
+@@ -0,0 +1,64 @@
++import assert from 'node:assert/strict'
++import { it } from 'node:test'
++
++import { RPCMessage, RPCMessages } from '#src/proto/api.ts'
++import { decodeRpcFrame, InvalidRpcFrameError, MAX_RPC_MESSAGES_PER_FRAME } from '#src/utils/rpc-frame.ts'
++
++function frame(count: number) {
++	return RPCMessages.encode(RPCMessages.create({ messages: Array.from({ length: count }, (_, id) => ({ id, createTunnelResponse: {} })) })).finish()
++}
++
++it('admits a full 32-message batch, but rejects entry 33 before either decoder runs', t => {
++	assert.equal(decodeRpcFrame(frame(MAX_RPC_MESSAGES_PER_FRAME)).messages.length, MAX_RPC_MESSAGES_PER_FRAME)
++	const oversized = frame(MAX_RPC_MESSAGES_PER_FRAME + 1)
++	const envelope = t.mock.method(RPCMessages, 'decode')
++	const entry = t.mock.method(RPCMessage, 'decode')
++	assert.throws(() => decodeRpcFrame(oversized), InvalidRpcFrameError)
++	assert.equal(envelope.mock.callCount(), 0)
++	assert.equal(entry.mock.callCount(), 0)
++})
++
++it('rejects millions of empty entries without allocating decoded objects', t => {
++	const envelope = t.mock.method(RPCMessages, 'decode')
++	const entry = t.mock.method(RPCMessage, 'decode')
++	for(const bytes of [64 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]) {
++		const flood = Buffer.alloc(bytes, Buffer.from([10, 0]))
++		assert.throws(() => decodeRpcFrame(flood), InvalidRpcFrameError)
++	}
++	assert.equal(envelope.mock.callCount(), 0)
++	assert.equal(entry.mock.callCount(), 0)
++})
++
++it('rejects empty, unknown-only, ambiguous and malformed entries before decoding', t => {
++	const envelope = t.mock.method(RPCMessages, 'decode')
++	for(const bytes of [
++		[], [10, 0], [10, 2, 8, 1], // empty envelope, empty entry, ID only
++		[10, 3, 208, 1, 0], // unknown field 26 only
++		[10, 4, 58, 0, 74, 0], // two known payloads
++		[10, 4, 58, 0, 58, 0], // duplicate known payload
++		[10, 2, 56, 0], // wrong wire type for known payload
++		[8, 0], [10], [10, 128], [10, 3, 58, 0], // wrong envelope type / truncation
++		[0], [11, 12], [10, 2, 11, 12], // zero tag / groups
++		[10, 2, 58, 1], // nested length exceeds entry
++		[10, 2, 58, 0, 0], // trailing invalid tag
++	]) assert.throws(() => decodeRpcFrame(Uint8Array.from(bytes)), InvalidRpcFrameError)
++	assert.equal(envelope.mock.callCount(), 0)
++})
++
++it('bounds unknown fields and keeps ordinary unknown fields compatible', () => {
++	assert.equal(decodeRpcFrame(Uint8Array.from([16, 1, 10, 5, 58, 0, 208, 1, 0])).messages.length, 1)
++	assert.throws(() => decodeRpcFrame(Buffer.concat([Buffer.alloc(130, Buffer.from([16, 1])), frame(1)])), InvalidRpcFrameError)
++	const body = Buffer.concat([Buffer.from([58, 0]), Buffer.alloc(192, Buffer.from([208, 1, 0]))])
++	assert.throws(() => decodeRpcFrame(Buffer.concat([Buffer.from([10, 194, 1]), body])), InvalidRpcFrameError)
++})
++
++it('keeps large byte payloads and all known message variants compatible', () => {
++	for(let field = 2; field <= 25; field++) {
++		const tag = field * 8 + 2
++		const encodedTag = tag < 128 ? [tag] : [tag & 127 | 128, tag >>> 7]
++		const entry = [...encodedTag, 0]
++		assert.equal(decodeRpcFrame(Uint8Array.from([10, entry.length, ...entry])).messages.length, 1)
++	}
++	const bytes = RPCMessages.encode(RPCMessages.create({ messages: [{ tunnelMessage: { tunnelId: 1, message: new Uint8Array(1024 * 1024) } }] })).finish()
++	assert.equal(decodeRpcFrame(bytes).messages[0].tunnelMessage?.message.length, 1024 * 1024)
++})
+diff --git a/src/utils/rpc-frame.ts b/src/utils/rpc-frame.ts
+new file mode 100644
+index 0000000..2f3014d
+--- /dev/null
++++ b/src/utils/rpc-frame.ts
+@@ -0,0 +1,79 @@
++import { BinaryReader } from '@bufbuild/protobuf/wire'
++
++import { RPCMessages } from '#src/proto/api.ts'
++import { AttestorError } from '#src/utils/error.ts'
++
++export const MAX_RPC_MESSAGES_PER_FRAME = 32
++const MAX_FIELDS_PER_ENVELOPE = 64
++const MAX_FIELDS_PER_MESSAGE = 64
++
++export class InvalidRpcFrameError extends AttestorError {
++	constructor() {
++		super('ERROR_BAD_REQUEST', 'Invalid RPC frame')
++	}
++}
++
++/** Validate the wire envelope before the generated decoder allocates any RPC objects. */
++export function decodeRpcFrame(bytes: Uint8Array): RPCMessages {
++	try {
++		// Count first, skipping bodies. Even millions of empty entries stop at entry 33.
++		scanEnvelope(bytes, false)
++		// Validate every entry before dispatching any part of the batch.
++		scanEnvelope(bytes, true)
++		return RPCMessages.decode(bytes)
++	} catch {
++		// Never retain or log attacker-controlled bytes or decoder error text.
++		throw new InvalidRpcFrameError()
++	}
++}
++
++function scanEnvelope(bytes: Uint8Array, validateMessages: boolean): void {
++	const reader = new BinaryReader(bytes)
++	let messages = 0
++	let fields = 0
++	while(reader.pos < reader.len) {
++		if(++fields > MAX_FIELDS_PER_ENVELOPE) throw new InvalidRpcFrameError()
++		const tag = reader.uint32()
++		if(tag >>> 3 === 1) {
++			if((tag & 7) !== 2 || ++messages > MAX_RPC_MESSAGES_PER_FRAME) {
++				throw new InvalidRpcFrameError()
++			}
++			const size = reader.uint32()
++			const end = reader.pos + size
++			if(end > reader.len) throw new InvalidRpcFrameError()
++			if(validateMessages) validateMessage(bytes.subarray(reader.pos, end))
++			reader.pos = end
++		} else {
++			skipField(reader, tag)
++		}
++	}
++	if(messages === 0) throw new InvalidRpcFrameError()
++}
++
++function validateMessage(bytes: Uint8Array): void {
++	const reader = new BinaryReader(bytes)
++	let fields = 0
++	let payloads = 0
++	while(reader.pos < reader.len) {
++		if(++fields > MAX_FIELDS_PER_MESSAGE) throw new InvalidRpcFrameError()
++		const tag = reader.uint32()
++		const field = tag >>> 3
++		// RPCMessage's oneof occupies fields 2..25 in the pinned proto/api.proto.
++		// Empty response bodies are valid; an empty RPCMessage is not.
++		if(field >= 2 && field <= 25) {
++			if((tag & 7) !== 2 || ++payloads > 1) throw new InvalidRpcFrameError()
++		} else if(field === 1 && (tag & 7) !== 0) {
++			throw new InvalidRpcFrameError()
++		}
++		skipField(reader, tag)
++	}
++	if(payloads !== 1) throw new InvalidRpcFrameError()
++}
++
++function skipField(reader: BinaryReader, tag: number): void {
++	const wireType = tag & 7
++	// No groups exist in this proto3 protocol; reject them without recursive skipping.
++	if(tag >>> 3 === 0 || ![0, 1, 2, 5].includes(wireType)) throw new InvalidRpcFrameError()
++	reader.skip(wireType)
++	if(reader.pos > reader.len) throw new InvalidRpcFrameError()
++}

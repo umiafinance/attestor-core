@@ -5,7 +5,7 @@ derived from Reclaim Protocol's AGPL-3.0-only attestor-core at the commit in
 `umia-source-manifest.json`. Umia's ordered patch set and image build inputs
 are in `umia-build/`.
 
-Monorepo source: https://github.com/umiafinance/umia/tree/8491bd68535dc837853317db0864b237a605f2a3/services/zktls-attestor
+Monorepo source: https://github.com/umiafinance/umia/tree/3d1b57d9f2340506faed69494d11708322c117f8/services/zktls-attestor
 
 To reproduce the patched tree, run `bash umia-build/build-source-fork.sh final
 --prepare-only /path/to/new-directory` from this repository. To build the
