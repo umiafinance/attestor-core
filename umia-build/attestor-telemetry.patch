@@ -1289,7 +1289,7 @@ new file mode 100644
 index 000000000..81c029d47
 --- /dev/null
 +++ b/src/tests/attestor-telemetry.test.ts
-@@ -0,0 +1,355 @@
+@@ -0,0 +1,357 @@
 +import assert from 'node:assert/strict'
 +import { createHash, randomUUID } from 'node:crypto'
 +import { readFileSync } from 'node:fs'
@@ -1494,24 +1494,26 @@ index 000000000..81c029d47
 +		const port = getRandomPort()
 +		const server = await createServer(port)
 +		const url = `ws://127.0.0.1:${port}${WS_PATHNAME}`
++		// Native WebSocket blocks some randomly chosen ports before reaching the server.
++		const makeWebSocket = (target: string) => new WebSocket(target)
 +		const clients: InstanceType<typeof AttestorClient>[] = []
 +		let idle: WebSocket | undefined
 +		try {
 +			const start = await collect()
 +
-+			const missing = new AttestorClient({ url })
++			const missing = new AttestorClient({ url, makeWebSocket })
 +			clients.push(missing)
 +			await assert.rejects(missing.waitForInit(), (err: any) => err.code === 'ERROR_AUTHENTICATION_FAILED')
 +
 +			const auth = await createAuthRequest({ id: AUTH_ID, hostWhitelist: [canaries.host, 'example.com'] }, key.privateKey)
-+			const client = new AttestorClient({ url, authRequest: auth })
++			const client = new AttestorClient({ url, makeWebSocket, authRequest: auth })
 +			clients.push(client)
 +			await client.waitForInit()
 +			await assert.rejects(client.rpc('createTunnel', { id: 7, host: canaries.tunnelHost, port: 443 }), (err: any) => err.code === 'ERROR_BAD_REQUEST')
 +			await assert.rejects(client.rpc('claimTunnel', { request: { id: 99, host: canaries.host, port: 443 }, data: { context: inputContext(SESSION_ID) } }), (err: any) => err.code === 'ERROR_NOT_FOUND')
 +
 +			const expiring = await createAuthRequest({ id: `${AUTH_ID.slice(0, -1)}0`, hostWhitelist: ['example.com'], expiresAt: Math.floor(Date.now() / 1000) + 2 }, key.privateKey)
-+			const short = new AttestorClient({ url, authRequest: expiring })
++			const short = new AttestorClient({ url, makeWebSocket, authRequest: expiring })
 +			clients.push(short)
 +			await short.waitForInit()
 +			idle = new WebSocket(url)

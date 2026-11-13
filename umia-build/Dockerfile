@@ -34,6 +34,8 @@ RUN cp node_modules/@reclaimprotocol/zk-symmetric-crypto/lib/stwo/s2circuits_bg.
 RUN npm run build:browser
 RUN npm prune --omit=dev
 
+# Leave room in the 4 GiB task for WASM, Buffer memory, and the log router.
+ENV NODE_OPTIONS="--max-old-space-size=2048"
 # The base image's unprivileged user; the server only reads /app at runtime.
 USER node
 # Only the final source layer requires the native engine after production pruning.

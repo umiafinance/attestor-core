@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'http'
 import { Address4, Address6 } from 'ip-address'
 
 import type { ServiceSignatureType } from '#src/proto/api.ts'
-import { RPCMessages } from '#src/proto/api.ts'
+import { decodeRpcFrame } from '#src/utils/rpc-frame.ts'
 import { resolveHostnames } from '#src/server/utils/dns.ts'
 import { getEnvVariable } from '#src/utils/env.ts'
 import { AttestorError, strToUint8Array } from '#src/utils/index.ts'
@@ -65,7 +65,7 @@ export function getInitialMessagesFromQuery(req: IncomingMessage) {
 	}
 
 	const msgsBytes = Buffer.from(messagesB64, 'base64')
-	const msgs = RPCMessages.decode(msgsBytes)
+	const msgs = decodeRpcFrame(msgsBytes)
 	return msgs.messages
 }
 

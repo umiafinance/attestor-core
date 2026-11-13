@@ -1,12 +1,18 @@
 import type { RPCMessage } from '#src/proto/api.ts'
-import { RPCMessages } from '#src/proto/api.ts'
 import type { IAttestorSocket } from '#src/types/index.ts'
+import { decodeRpcFrame, InvalidRpcFrameError } from '#src/utils/rpc-frame.ts'
 import { AttestorError, extractArrayBufferFromWsData, getRpcRequest, getRpcRequestType, getRpcResponseType } from '#src/utils/index.ts'
 
 export async function wsMessageHandler(this: IAttestorSocket, data: unknown) {
 	// extract array buffer from WS data & decode proto
 	const buff = await extractArrayBufferFromWsData(data)
-	const { messages } = RPCMessages.decode(buff)
+	let messages: RPCMessage[]
+	try {
+		messages = decodeRpcFrame(buff).messages
+	} catch(err) {
+		await this.terminateConnection(err)
+		return
+	}
 	for(const msg of messages) {
 		await handleMessage.call(this, msg)
 	}
@@ -118,5 +124,5 @@ export function handleMessage(this: IAttestorSocket, msg: RPCMessage) {
 		return
 	}
 
-	this.logger.warn({ msg }, 'unhandled message')
+	return this.terminateConnection(new InvalidRpcFrameError())
 }

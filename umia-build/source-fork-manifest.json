@@ -111,9 +111,15 @@
       "tests": []
     },
     {
+      "layer": "rpc",
+      "file": "rpc-frame-limits.patch",
+      "sha256": "89caccc5e4e561321d58db7158373bffbd72b55721e01a3167992ac083663fc3",
+      "tests": ["rpc-frame.test.ts", "rpc-frame-socket.test.ts"]
+    },
+    {
       "layer": "final",
       "file": "attestor-telemetry.patch",
-      "sha256": "83b456b83b5516b70a0eba09bb9e79ebc2e071605c5271787d242bf81bb9951f",
+      "sha256": "558b313afffae572dd4b03473f13fdc564078ac5a388f544d9a3e94c6a151ee0",
       "tests": ["attestor-telemetry.test.ts", "regex-safety.test.ts", "http-regex.test.ts"],
       "packageSha256": "b7b08559bbea6bf633546c5eaca956a5ddda4ead01fe56d0f5502832b9a19386",
       "packageLockSha256": "8faf13f1f9ab7bd0f5d97b133f2c175a4711580404ef8d7753cd145d1ce2eed8"
